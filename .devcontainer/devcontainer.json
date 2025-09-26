@@ -1,0 +1,12 @@
+{
+	"name": "Debian",
+	"image": "mcr.microsoft.com/devcontainers/base:bullseye",
+	"features": {
+		"ghcr.io/shyim/devcontainers-features/bun:0": {},
+		"ghcr.io/devcontainers-extra/features/supabase-cli:1": {},
+		"ghcr.io/devcontainers/features/node:1": {
+			"version": "lts"
+		}
+	},
+	"postCreateCommand": "bun install -g pm2 && echo 'export PATH=$PATH:/home/vscode/.bun/bin' >> /home/vscode/.bashrc"
+}
