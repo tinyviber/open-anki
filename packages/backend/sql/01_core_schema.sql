@@ -1,9 +1,11 @@
 -- Anki Core Schema for OpenAnki Sync Service
 -- This schema implements user isolation via Row Level Security (RLS)
 
+-- Cleanup: Drop tables if they exist to allow clean re-creation
+DROP TABLE IF EXISTS sync_meta, review_logs, cards, notes, decks CASCADE; 
+
 -- 1. Enable Row Level Security (RLS) on the database
--- This needs to be run as a superuser or with appropriate privileges
--- CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- 2. Core Tables
 
@@ -15,7 +17,9 @@ CREATE TABLE IF NOT EXISTS decks (
     description TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    config JSONB DEFAULT '{}' -- Deck configuration (new interval, etc.)
+    config JSONB DEFAULT '{}', -- Deck configuration (new interval, etc.)
+    -- FIX: Adding UNIQUE constraint for composite FK
+    UNIQUE(user_id, id) 
 );
 
 -- Notes table: Represents Anki notes (the content that cards are based on)
@@ -28,6 +32,8 @@ CREATE TABLE IF NOT EXISTS notes (
     tags TEXT[], -- Array of tags
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    -- FIX: Adding UNIQUE constraint for composite FK
+    UNIQUE(user_id, id), 
     -- Ensure notes belong to the correct user's deck
     FOREIGN KEY (user_id, deck_id) REFERENCES decks(user_id, id) ON DELETE CASCADE
 );
@@ -51,6 +57,8 @@ CREATE TABLE IF NOT EXISTS cards (
     original_due INTEGER DEFAULT 0, -- For v1 scheduler compatibility
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    -- FIX: Adding UNIQUE constraint for composite FK
+    UNIQUE(user_id, id), 
     -- Ensure cards belong to the correct user's note
     FOREIGN KEY (user_id, note_id) REFERENCES notes(user_id, id) ON DELETE CASCADE
 );
@@ -59,7 +67,7 @@ CREATE TABLE IF NOT EXISTS cards (
 CREATE TABLE IF NOT EXISTS review_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL, -- Supabase Auth User ID
-    card_id UUID NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+    card_id UUID NOT NULL,
     timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     rating INTEGER NOT NULL, -- 1-4 (Again, Hard, Good, Easy)
     duration_ms INTEGER, -- Time taken to answer the card in milliseconds
@@ -86,6 +94,8 @@ CREATE TABLE IF NOT EXISTS sync_meta (
 
 -- 3. Row Level Security (RLS) Policies
 -- These ensure that users can only access their own data
+
+-- RLS helper function assumed (auth.uid() comes from Supabase GoTrue context)
 
 -- Decks RLS
 ALTER TABLE decks ENABLE ROW LEVEL SECURITY;
@@ -138,7 +148,7 @@ CREATE INDEX idx_sync_meta_user_version ON sync_meta(user_id, version); -- Criti
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
-    NEW updated_at = NOW();
+    NEW.updated_at = NOW(); -- FIX: Syntax corrected to NEW.updated_at
     RETURN NEW;
 END;
 $$ language 'plpgsql';
