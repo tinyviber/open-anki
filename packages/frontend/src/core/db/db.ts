@@ -6,7 +6,12 @@ export interface Deck {
   id: string // UUID
   name: string
   parentId: string | null
-  config: Record<string, any> // 算法参数等配置
+  config: { // 优化: 明确 config 结构
+    description?: string;
+    difficulty: "easy" | "medium" | "hard" | "auto"; // 新增难度字段
+    algorithmConfig?: Record<string, any>; // 算法参数等配置
+    [key: string]: any; 
+  }
   createdAt: number
   updatedAt: number
 }

@@ -1,43 +1,30 @@
-import { type ReactNode } from 'react'
+import { type ReactNode } from 'react';
+import { Header } from '@/components/Header';
+import { Sidebar } from '@/components/Sidebar';
+import { Outlet } from 'react-router-dom';
 
-// 假设我们有一个 Shadcn 的 SideBar 组件和 Header 组件
-// 目前先用简单的 div 占位，等待下一步安装 UI 组件
-const Header = () => (
-  <header className="flex items-center justify-between p-4 border-b border-border bg-card">
-    <h1 className="text-xl font-bold">Open Anki</h1>
-    <div className="flex items-center space-x-4">
-      {/* 搜索框、同步状态、用户菜单 */}
-      <button>Sync</button>
-      <button>User</button>
-    </div>
-  </header>
-)
-
-const Sidebar = () => (
-  <nav className="w-64 border-r border-border p-4 h-full bg-sidebar flex flex-col space-y-2">
-    <h2 className="text-lg font-semibold text-sidebar-foreground">Decks</h2>
-    {/* 菜单项占位 */}
-    <a href="/" className="text-sidebar-primary-foreground">Dashboard</a>
-    <a href="/review" className="text-sidebar-foreground">Start Review</a>
-    <a href="/notes" className="text-sidebar-foreground">Notes/Templates</a>
-    <a href="/stats" className="text-sidebar-foreground">Stats</a>
-  </nav>
-)
-
-interface LayoutProps {
-  children: ReactNode
+interface LayoutWrapperProps {
+  children?: ReactNode; // Removed children type since react-router Outlet is used. Using Outlet
 }
 
-export function AppLayout({ children }: LayoutProps) {
+// 统一的页面布局，包含 Header 和 Sidebar
+export function LayoutWrapper() {
   return (
-    <div className="flex flex-col min-h-screen">
-      <Header />
-      <div className="flex flex-1 overflow-hidden">
+    <div className="min-h-screen bg-background text-foreground">
+      {/* 1. FIXED HEADER：固定在顶层 */}
+      <Header /> 
+
+      {/* 2. HEADER SPACER：弥补固定 Header 腾出的空间（高度 h-14 / 3.5rem） */}
+      <div className="h-14 flex-shrink-0" /> 
+
+      <div className="flex w-full">
+        {/* 侧边栏 sticky top-14，占据垂直空间 */}
         <Sidebar />
-        <main className="flex-1 p-8 overflow-y-auto">
-          {children}
+
+        <main className="flex-1 p-6 md:p-8 w-full max-w-full">
+          <Outlet /> {/* Renders the current route's element */}
         </main>
       </div>
     </div>
-  )
+  );
 }
