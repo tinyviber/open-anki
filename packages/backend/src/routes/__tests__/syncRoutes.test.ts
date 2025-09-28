@@ -428,4 +428,57 @@ describe('syncRoutes timestamp handling', () => {
     expect(Number(syncMetaRows.rows[0].version)).toBe(1);
     expect(syncMetaRows.rows[0].device_id).toBe('device-1');
   });
+
+  it('paginates pull responses using continuation tokens', async () => {
+    const totalOps = 105;
+    const baseTimestamp = Date.now();
+    const ops = Array.from({ length: totalOps }, (_, index) => ({
+      entityId: `deck-pagination-${index + 1}`,
+      entityType: 'deck' as const,
+      version: index + 1,
+      op: 'create' as const,
+      timestamp: baseTimestamp + index,
+      payload: {
+        name: `Deck ${index + 1}`,
+        description: null,
+        config: {},
+      },
+    }));
+
+    const pushResponse = await fetch(`${baseUrl}/push`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ deviceId: 'pagination-device', ops }),
+    });
+
+    expect(pushResponse.status).toBe(200);
+    const pushBody = await pushResponse.json();
+    expect(pushBody.currentVersion).toBe(totalOps);
+
+    const firstPullResponse = await fetch(`${baseUrl}/pull`);
+    expect(firstPullResponse.status).toBe(200);
+    const firstPullBody = await firstPullResponse.json();
+
+    expect(firstPullBody.ops.length).toBeGreaterThan(0);
+    expect(firstPullBody.ops.length).toBeLessThan(totalOps);
+    expect(firstPullBody.ops[0].version).toBe(1);
+    expect(firstPullBody.hasMore).toBe(true);
+    expect(firstPullBody.continuationToken).toBeTruthy();
+
+    const firstPageSize = firstPullBody.ops.length;
+    const continuationToken = firstPullBody.continuationToken as string;
+    const secondPullResponse = await fetch(
+      `${baseUrl}/pull?continuationToken=${encodeURIComponent(continuationToken)}`
+    );
+
+    expect(secondPullResponse.status).toBe(200);
+    const secondPullBody = await secondPullResponse.json();
+
+    expect(secondPullBody.ops).toHaveLength(totalOps - firstPageSize);
+    expect(secondPullBody.ops[0].version).toBe(firstPageSize + 1);
+    expect(secondPullBody.ops.at(-1)?.version).toBe(totalOps);
+    expect(secondPullBody.hasMore).toBe(false);
+    expect(secondPullBody.continuationToken).toBeNull();
+    expect(secondPullBody.newVersion).toBe(totalOps);
+  });
 });
