@@ -67,7 +67,7 @@ describe('syncRoutes timestamp handling', () => {
         lapses INTEGER,
         card_type INTEGER,
         queue INTEGER,
-        original_due TIMESTAMPTZ,
+        original_due INTEGER,
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
@@ -204,8 +204,8 @@ describe('syncRoutes timestamp handling', () => {
     const cardRow = cardRows.rows[0];
     expect(cardRow.due).toBeInstanceOf(Date);
     expect((cardRow.due as Date).getTime()).toBe(dueMillis);
-    expect(cardRow.original_due).toBeInstanceOf(Date);
-    expect((cardRow.original_due as Date).getTime()).toBe(originalDueMillis);
+    expect(typeof cardRow.original_due).toBe('number');
+    expect(cardRow.original_due).toBe(originalDueMillis);
 
     const reviewRows = await pool.query('SELECT timestamp FROM review_logs');
     expect(reviewRows.rows).toHaveLength(1);
