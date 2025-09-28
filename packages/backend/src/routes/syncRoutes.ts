@@ -47,6 +47,12 @@ interface SyncMetaRow {
     diff?: unknown;
 }
 
+interface DeviceProgressRow {
+    last_version: number | string;
+    last_meta_id: number | string | null;
+    continuation_token: string | null;
+}
+
 interface ConflictDetail {
     entityId: string;
     entityType: EntityType;
@@ -61,6 +67,14 @@ class SyncConflictError extends Error {
         super('Sync conflict detected');
     }
 }
+
+const toNumberOrNull = (value: unknown): number | null => {
+    if (value === null || value === undefined) {
+        return null;
+    }
+    const numericValue = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(numericValue) ? numericValue : null;
+};
 
 export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
     fastify.setValidatorCompiler(validatorCompiler);
@@ -206,7 +220,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
       async (request, reply) => {
         const userId = request.user.id;
         const {
-            sinceVersion,
+            sinceVersion: requestedSinceVersion,
             limit = DEFAULT_PULL_LIMIT,
             deviceId = DEFAULT_PULL_DEVICE_ID,
             continuationToken,
@@ -216,39 +230,61 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
         const effectiveDeviceId = deviceId ?? DEFAULT_PULL_DEVICE_ID;
         const fetchLimit = effectiveLimit + 1;
 
-        let decodedContinuation: { version: number; id: number } | null = null;
-        if (continuationToken) {
-            try {
-                decodedContinuation = decodeContinuationToken(continuationToken);
-            } catch (error) {
-                fastify.log.warn(
-                    { userId, sinceVersion, continuationToken, err: error },
-                    'Invalid continuation token provided to /pull'
-                );
-                return reply.code(400).send({ error: 'Invalid continuation token supplied.' });
-            }
-        }
-
-        fastify.log.debug(
-            {
-                userId,
-                sinceVersion,
-                limit: effectiveLimit,
-                deviceId: effectiveDeviceId,
-                continuationToken,
-            },
-            'Processing sync pull request'
-        );
-
         try {
-            let applyContinuation = false;
-            if (decodedContinuation && decodedContinuation.version >= sinceVersion) {
-                applyContinuation = true;
+            const progressResult = await query(
+                `
+                    SELECT last_version, last_meta_id, continuation_token
+                    FROM device_sync_progress
+                    WHERE user_id = $1 AND device_id = $2
+                    LIMIT 1;
+                `,
+                [userId, effectiveDeviceId]
+            );
+
+            const existingProgress = progressResult.rows[0] as DeviceProgressRow | undefined;
+            const storedVersion = toNumberOrNull(existingProgress?.last_version) ?? 0;
+            const storedLastMetaId = toNumberOrNull(existingProgress?.last_meta_id);
+
+            const hasRequestedSince =
+                typeof requestedSinceVersion === 'number' && Number.isFinite(requestedSinceVersion);
+            const effectiveSinceVersion = hasRequestedSince ? requestedSinceVersion! : storedVersion;
+
+            let continuationTokenToUse = continuationToken ?? null;
+            if (!continuationTokenToUse && !hasRequestedSince && existingProgress?.continuation_token) {
+                continuationTokenToUse = existingProgress.continuation_token;
             }
+
+            let decodedContinuation: { version: number; id: number } | null = null;
+            if (continuationTokenToUse) {
+                try {
+                    decodedContinuation = decodeContinuationToken(continuationTokenToUse);
+                } catch (error) {
+                    fastify.log.warn(
+                        { userId, requestedSinceVersion, continuationToken: continuationTokenToUse, err: error },
+                        'Invalid continuation token provided to /pull'
+                    );
+                    return reply.code(400).send({ error: 'Invalid continuation token supplied.' });
+                }
+            }
+
+            fastify.log.debug(
+                {
+                    userId,
+                    requestedSinceVersion,
+                    sinceVersion: effectiveSinceVersion,
+                    limit: effectiveLimit,
+                    deviceId: effectiveDeviceId,
+                    continuationToken: continuationTokenToUse,
+                },
+                'Processing sync pull request'
+            );
+
+            const applyContinuation =
+                decodedContinuation !== null && decodedContinuation.version >= effectiveSinceVersion;
 
             const comparisonVersion = applyContinuation
-                ? Math.max(sinceVersion, decodedContinuation!.version)
-                : sinceVersion;
+                ? Math.max(effectiveSinceVersion, decodedContinuation!.version)
+                : effectiveSinceVersion;
 
             const params: unknown[] = [userId, comparisonVersion];
             let sql = `
@@ -280,15 +316,42 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
 
             const ops = await Promise.all(metaRows.map(row => mapMetaRowToOp(row, userId)));
 
-            const baselineVersion = Math.max(sinceVersion, decodedContinuation?.version ?? sinceVersion);
+            const baselineVersion = Math.max(
+                effectiveSinceVersion,
+                decodedContinuation?.version ?? effectiveSinceVersion
+            );
             const highestVersion = ops.length > 0 ? ops[ops.length - 1].version : baselineVersion;
 
-            const nextToken = hasMore && metaRows.length > 0
-                ? encodeContinuationToken(
-                      Number(metaRows[metaRows.length - 1].version),
-                      Number(metaRows[metaRows.length - 1].id)
-                  )
-                : null;
+            const nextToken =
+                hasMore && metaRows.length > 0
+                    ? encodeContinuationToken(
+                          Number(metaRows[metaRows.length - 1].version),
+                          Number(metaRows[metaRows.length - 1].id)
+                      )
+                    : null;
+
+            let lastMetaIdValue = metaRows.length > 0 ? toNumberOrNull(metaRows[metaRows.length - 1].id) : null;
+            if (lastMetaIdValue === null) {
+                if (applyContinuation && decodedContinuation) {
+                    lastMetaIdValue = decodedContinuation.id;
+                } else {
+                    lastMetaIdValue = storedLastMetaId ?? null;
+                }
+            }
+
+            await query(
+                `
+                    INSERT INTO device_sync_progress (user_id, device_id, last_version, last_meta_id, continuation_token, updated_at)
+                    VALUES ($1, $2, $3, $4, $5, NOW())
+                    ON CONFLICT (user_id, device_id)
+                    DO UPDATE SET
+                        last_version = EXCLUDED.last_version,
+                        last_meta_id = EXCLUDED.last_meta_id,
+                        continuation_token = EXCLUDED.continuation_token,
+                        updated_at = NOW();
+                `,
+                [userId, effectiveDeviceId, highestVersion, lastMetaIdValue, nextToken]
+            );
 
             const response: PullResponse = {
                 ops,
@@ -300,7 +363,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
             return reply.send(response);
 
         } catch (error) {
-            fastify.log.error("Sync Pull failed:", error);
+            fastify.log.error('Sync Pull failed:', error);
             reply.code(500).send({ error: 'Error pulling changes.' });
         }
     });
