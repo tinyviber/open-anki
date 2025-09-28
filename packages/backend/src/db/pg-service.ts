@@ -1,27 +1,26 @@
-import { Pool } from 'pg';
+import { Pool, QueryResult } from 'pg';
 
-type QueryablePool = Pick<Pool, 'query' | 'end'>;
+type QueryParams = any[];
+type QueryImplementation = (text: string, params?: QueryParams) => Promise<QueryResult<any>>;
 
-const DEFAULT_CONNECTION_STRING = process.env.DATABASE_URL || "postgres://postgres:password@localhost:54322/postgres";
+export const pool = new Pool({
+  connectionString: process.env.DATABASE_URL || "postgres://postgres:password@localhost:54322/postgres",
+});
 
-let activePool: QueryablePool | null = null;
+let currentQuery: QueryImplementation = (text: string, params: QueryParams = []) =>
+  pool.query(text, params);
 
-const createDefaultPool = () => new Pool({ connectionString: DEFAULT_CONNECTION_STRING });
-
-const getPool = () => {
-  if (!activePool) {
-    activePool = createDefaultPool();
-  }
-  return activePool;
+export const query = (text: string, params: QueryParams = []) => {
+  return currentQuery(text, params);
 };
 
-export const query = (text: string, params: any[] = []) => {
-  return getPool().query(text, params);
+export const setQueryClient = (client: { query: QueryImplementation }) => {
+  currentQuery = (text: string, params: QueryParams = []) => client.query(text, params);
 };
 
-export const setTestPool = (pool: QueryablePool | null) => {
-  activePool = pool;
-};
+export const resetQueryClient = () => {
+  currentQuery = (text: string, params: QueryParams = []) => pool.query(text, params);
+}
 
 process.on('SIGINT', () => {
     if (activePool) {
