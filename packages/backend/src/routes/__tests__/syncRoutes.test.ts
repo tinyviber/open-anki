@@ -3,6 +3,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { newDb } from 'pg-mem';
 import { syncRoutes } from '../syncRoutes.js';
 import { setTestPool } from '../../db/pg-service.js';
+import { DEFAULT_PULL_LIMIT } from '../../../../shared/src/sync.js';
 
 const TEST_USER_ID = '00000000-0000-0000-0000-000000000001';
 
@@ -480,5 +481,51 @@ describe('syncRoutes timestamp handling', () => {
     expect(secondPullBody.hasMore).toBe(false);
     expect(secondPullBody.continuationToken).toBeNull();
     expect(secondPullBody.newVersion).toBe(totalOps);
+  });
+
+  it('returns session metadata including latest version and default pull limit', async () => {
+    const beforeRequestTimestamp = Date.now();
+    const initialResponse = await fetch(`${baseUrl}/session`);
+    expect(initialResponse.status).toBe(200);
+    const initialBody = await initialResponse.json();
+
+    expect(initialBody.userId).toBe(TEST_USER_ID);
+    expect(initialBody.latestVersion).toBe(0);
+    expect(initialBody.defaultPullLimit).toBe(DEFAULT_PULL_LIMIT);
+    expect(initialBody.serverTimestamp).toBeGreaterThanOrEqual(beforeRequestTimestamp);
+    expect(initialBody.serverTimestamp).toBeLessThanOrEqual(Date.now());
+
+    const pushResponse = await fetch(`${baseUrl}/push`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        deviceId: 'session-device',
+        ops: [
+          {
+            entityId: 'deck-session-1',
+            entityType: 'deck',
+            version: 1,
+            op: 'create',
+            timestamp: Date.now(),
+            payload: {
+              name: 'Session Deck',
+              description: null,
+              config: {},
+            },
+          },
+        ],
+      }),
+    });
+
+    expect(pushResponse.status).toBe(200);
+
+    const afterPushResponse = await fetch(`${baseUrl}/session`);
+    expect(afterPushResponse.status).toBe(200);
+    const afterPushBody = await afterPushResponse.json();
+
+    expect(afterPushBody.latestVersion).toBe(1);
+    expect(afterPushBody.userId).toBe(TEST_USER_ID);
+    expect(afterPushBody.defaultPullLimit).toBe(DEFAULT_PULL_LIMIT);
+    expect(afterPushBody.serverTimestamp).toBeGreaterThanOrEqual(initialBody.serverTimestamp);
   });
 });

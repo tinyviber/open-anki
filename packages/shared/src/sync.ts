@@ -163,6 +163,15 @@ export const pullResponseSchema = z.object({
 
 export type PullResponse = z.infer<typeof pullResponseSchema>;
 
+export const sessionResponseSchema = z.object({
+  userId: z.string(),
+  latestVersion: z.number(),
+  serverTimestamp: z.number(),
+  defaultPullLimit: z.number(),
+});
+
+export type SessionResponse = z.infer<typeof sessionResponseSchema>;
+
 export function encodeContinuationToken(version: number, id: number): ContinuationToken {
   if (!Number.isInteger(version) || version < 0) {
     throw new Error(`Invalid version for continuation token: ${version}`);
