@@ -5,7 +5,8 @@
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun --watch src/index.ts",
-    "build": "tsc"
+    "build": "tsc",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.6",
@@ -13,7 +14,8 @@
     "@types/pg": "^8.11.4",
     "bun-types": "^1.1.0",
     "pg-mem": "^3.0.5",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "vitest": "^3.2.4"
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",

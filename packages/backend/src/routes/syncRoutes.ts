@@ -1,7 +1,7 @@
 import { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { query } from '../db/pg-service.js';
 
-interface OpLog {
+export interface OpLog {
     entityId: string;
     entityType: 'deck' | 'note' | 'card' | 'review_log';
     version: number;
@@ -218,23 +218,27 @@ async function handleNoteOperation(userId: string, op: OpLog) {
     }
 }
 
-async function handleCardOperation(userId: string, op: OpLog) {
+export async function handleCardOperation(userId: string, op: OpLog) {
     if (!op.payload) return;
 
     if (op.op === 'create') {
+        const due = hasOwn(op.payload, 'due') ? toDateValue(op.payload.due) : new Date();
+        const originalDue = hasOwn(op.payload, 'original_due') ? op.payload.original_due : 0;
         const insertQuery = `
-            INSERT INTO cards (id, user_id, note_id, ordinal, due, interval, ease_factor, 
+            INSERT INTO cards (id, user_id, note_id, ordinal, due, interval, ease_factor,
                               reps, lapses, card_type, queue, original_due)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             ON CONFLICT (id) DO NOTHING;
         `;
         await query(insertQuery, [
-            op.entityId, userId, op.payload.note_id, op.payload.ordinal, 
-            op.payload.due || new Date(), op.payload.interval || 0, op.payload.ease_factor || 2.5,
-            op.payload.reps || 0, op.payload.lapses || 0, op.payload.card_type || 0, 
-            op.payload.queue || 0, op.payload.original_due || 0
+            op.entityId, userId, op.payload.note_id, op.payload.ordinal,
+            due, op.payload.interval || 0, op.payload.ease_factor || 2.5,
+            op.payload.reps || 0, op.payload.lapses || 0, op.payload.card_type || 0,
+            op.payload.queue || 0, originalDue
         ]);
     } else if (op.op === 'update') {
+        const due = hasOwn(op.payload, 'due') ? toDateValue(op.payload.due) : new Date();
+        const originalDue = hasOwn(op.payload, 'original_due') ? op.payload.original_due : 0;
         const updateQuery = `
             UPDATE cards
             SET note_id = $1, ordinal = $2, due = $3, interval = $4, ease_factor = $5,
@@ -242,9 +246,9 @@ async function handleCardOperation(userId: string, op: OpLog) {
             WHERE id = $11 AND user_id = $12;
         `;
         await query(updateQuery, [
-            op.payload.note_id, op.payload.ordinal, op.payload.due, op.payload.interval, 
-            op.payload.ease_factor, op.payload.reps, op.payload.lapses, 
-            op.payload.card_type, op.payload.queue, op.payload.original_due || 0, 
+            op.payload.note_id, op.payload.ordinal, due, op.payload.interval,
+            op.payload.ease_factor, op.payload.reps, op.payload.lapses,
+            op.payload.card_type, op.payload.queue, originalDue,
             op.entityId, userId
         ]);
     } else if (op.op === 'delete') {
@@ -256,17 +260,18 @@ async function handleCardOperation(userId: string, op: OpLog) {
     }
 }
 
-async function handleReviewLogOperation(userId: string, op: OpLog) {
+export async function handleReviewLogOperation(userId: string, op: OpLog) {
     if (!op.payload) return;
 
     if (op.op === 'create') {
+        const timestamp = hasOwn(op.payload, 'timestamp') ? toDateValue(op.payload.timestamp) : new Date();
         const insertQuery = `
             INSERT INTO review_logs (id, user_id, card_id, timestamp, rating, duration_ms)
             VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT (id) DO NOTHING;
         `;
         await query(insertQuery, [
-            op.entityId, userId, op.payload.card_id, op.payload.timestamp || new Date(), 
+            op.entityId, userId, op.payload.card_id, timestamp,
             op.payload.rating, op.payload.duration_ms
         ]);
     } else if (op.op === 'delete') {
@@ -307,4 +312,22 @@ async function fetchEntityData(userId: string, entityId: string, entityType: 'de
         return result.rows[0] || null;
     }
     return null;
+}
+
+function hasOwn(payload: Record<string, any>, key: string): boolean {
+    return Object.prototype.hasOwnProperty.call(payload, key) && payload[key] !== undefined && payload[key] !== null;
+}
+
+function toDateValue(value: unknown): Date {
+    if (value instanceof Date) {
+        return value;
+    }
+    if (typeof value === 'number' || typeof value === 'string') {
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) {
+            throw new Error('Invalid timestamp value received for database operation.');
+        }
+        return date;
+    }
+    throw new Error('Invalid timestamp value received for database operation.');
 }
