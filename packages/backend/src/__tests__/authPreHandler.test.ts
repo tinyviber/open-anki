@@ -7,9 +7,12 @@ let buildApp: typeof import('../index.js')['buildApp'];
 describe('buildApp auth preHandler', () => {
   let app: FastifyInstance;
   let baseUrl: string;
+  const ORIGINAL_SECRET = process.env.SUPABASE_JWT_SECRET;
+  const TEST_SECRET = 'test-secret';
 
   beforeAll(async () => {
     process.env.NODE_ENV = 'test';
+    process.env.SUPABASE_JWT_SECRET = TEST_SECRET;
     ({ buildApp } = await import('../index.js'));
     setTestPool({
       connect: async () => {
@@ -35,6 +38,11 @@ describe('buildApp auth preHandler', () => {
   afterAll(async () => {
     setTestPool(null);
     await app.close();
+    if (ORIGINAL_SECRET === undefined) {
+      delete process.env.SUPABASE_JWT_SECRET;
+    } else {
+      process.env.SUPABASE_JWT_SECRET = ORIGINAL_SECRET;
+    }
   });
 
   it('returns 401 for unauthenticated push requests', async () => {

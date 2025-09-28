@@ -11,8 +11,17 @@ declare module 'fastify' {
 }
 
 // 确保在环境变量中设置了 SUPABASE_JWT_SECRET
-const resolveJwtSecret = () =>
-    process.env.SUPABASE_JWT_SECRET || 'your_super_secret_jwt_key_from_supabase_config';
+export const resolveJwtSecret = () => {
+    const secret = process.env.SUPABASE_JWT_SECRET?.trim();
+
+    if (secret) {
+        return secret;
+    }
+
+    throw new Error(
+        'SUPABASE_JWT_SECRET environment variable must be set to verify Supabase JWTs.'
+    );
+};
 
 
 /**
