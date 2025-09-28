@@ -22,6 +22,8 @@ import {
     reviewLogPayloadSchema,
     DEFAULT_PULL_DEVICE_ID,
     DEFAULT_PULL_LIMIT,
+    decodeContinuationToken,
+    encodeContinuationToken,
 } from '../../../shared/src/sync.js';
 import { getQueryClient, query, type QueryClient } from '../db/pg-service.js';
 
@@ -34,6 +36,7 @@ type CardOp = Extract<SyncOp, { entityType: 'card' }>;
 type ReviewLogOp = Extract<SyncOp, { entityType: 'review_log' }>;
 
 interface SyncMetaRow {
+    id: number | string;
     entity_id: string;
     entity_type: EntityType;
     version: number;
@@ -202,37 +205,96 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
       },
       async (request, reply) => {
         const userId = request.user.id;
-        const { sinceVersion, limit = DEFAULT_PULL_LIMIT, deviceId = DEFAULT_PULL_DEVICE_ID } = request.query;
+        const {
+            sinceVersion,
+            limit = DEFAULT_PULL_LIMIT,
+            deviceId = DEFAULT_PULL_DEVICE_ID,
+            continuationToken,
+        } = request.query;
 
         const effectiveLimit = Number.isFinite(limit) ? limit : DEFAULT_PULL_LIMIT;
         const effectiveDeviceId = deviceId ?? DEFAULT_PULL_DEVICE_ID;
+        const fetchLimit = effectiveLimit + 1;
+
+        let decodedContinuation: { version: number; id: number } | null = null;
+        if (continuationToken) {
+            try {
+                decodedContinuation = decodeContinuationToken(continuationToken);
+            } catch (error) {
+                fastify.log.warn(
+                    { userId, sinceVersion, continuationToken, err: error },
+                    'Invalid continuation token provided to /pull'
+                );
+                return reply.code(400).send({ error: 'Invalid continuation token supplied.' });
+            }
+        }
 
         fastify.log.debug(
-            { userId, sinceVersion, limit: effectiveLimit, deviceId: effectiveDeviceId },
+            {
+                userId,
+                sinceVersion,
+                limit: effectiveLimit,
+                deviceId: effectiveDeviceId,
+                continuationToken,
+            },
             'Processing sync pull request'
         );
 
         try {
-            // Fetch SyncMeta records that happened AFTER the client's version.
-            const metaResults = await query(
-                `
+            let applyContinuation = false;
+            if (decodedContinuation && decodedContinuation.version >= sinceVersion) {
+                applyContinuation = true;
+            }
+
+            const comparisonVersion = applyContinuation
+                ? Math.max(sinceVersion, decodedContinuation!.version)
+                : sinceVersion;
+
+            const params: unknown[] = [userId, comparisonVersion];
+            let sql = `
                 SELECT id, entity_id, entity_type, version, op, timestamp, payload
                 FROM sync_meta
                 WHERE user_id = $1 AND version > $2
-                ORDER BY version ASC
+                ORDER BY version ASC, id ASC
                 LIMIT $3;
-                `,
-                [userId, sinceVersion, effectiveLimit]
-            );
+            `;
 
-            const metaRows = metaResults.rows as SyncMetaRow[];
+            if (applyContinuation) {
+                sql = `
+                    SELECT id, entity_id, entity_type, version, op, timestamp, payload
+                    FROM sync_meta
+                    WHERE user_id = $1 AND (version > $2 OR (version = $3 AND id > $4))
+                    ORDER BY version ASC, id ASC
+                    LIMIT $5;
+                `;
+                params.push(decodedContinuation!.version, decodedContinuation!.id, fetchLimit);
+            } else {
+                params.push(fetchLimit);
+            }
+
+            const metaResults = await query(sql, params);
+
+            const metaRowsRaw = metaResults.rows as SyncMetaRow[];
+            const hasMore = metaRowsRaw.length > effectiveLimit;
+            const metaRows = hasMore ? metaRowsRaw.slice(0, effectiveLimit) : metaRowsRaw;
+
             const ops = await Promise.all(metaRows.map(row => mapMetaRowToOp(row, userId)));
 
-            const highestVersion = ops.length > 0 ? ops[ops.length - 1].version : sinceVersion;
+            const baselineVersion = Math.max(sinceVersion, decodedContinuation?.version ?? sinceVersion);
+            const highestVersion = ops.length > 0 ? ops[ops.length - 1].version : baselineVersion;
+
+            const nextToken = hasMore && metaRows.length > 0
+                ? encodeContinuationToken(
+                      Number(metaRows[metaRows.length - 1].version),
+                      Number(metaRows[metaRows.length - 1].id)
+                  )
+                : null;
 
             const response: PullResponse = {
                 ops,
                 newVersion: highestVersion,
+                hasMore,
+                continuationToken: nextToken,
             };
 
             return reply.send(response);

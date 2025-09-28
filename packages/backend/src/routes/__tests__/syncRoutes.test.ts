@@ -232,6 +232,8 @@ describe('syncRoutes timestamp handling', () => {
     expect(pullResponse.status).toBe(200);
     const body = await pullResponse.json();
     expect(body.ops).toHaveLength(4);
+    expect(body.hasMore).toBe(false);
+    expect(body.continuationToken).toBeNull();
 
     const cardOp = body.ops.find((op: any) => op.entityType === 'card');
     expect(cardOp).toBeTruthy();
@@ -253,6 +255,73 @@ describe('syncRoutes timestamp handling', () => {
     expect(reviewOp.timestamp).toBe(timestampMillis + 3);
     expect(reviewOp.payload.timestamp).toBe(reviewTimestampMillis);
     expect(reviewOp.payload.duration_ms).toBe(1200);
+  });
+
+  it('streams operations across multiple pull pages using continuation tokens', async () => {
+    const totalOps = 12;
+    const baseTimestamp = Date.parse('2024-01-01T00:00:00.000Z');
+
+    for (let i = 0; i < totalOps; i += 1) {
+      const entityId = `deck-${i + 1}`;
+      const timestamp = new Date(baseTimestamp + i);
+      const payload = {
+        name: `Deck ${i + 1}`,
+        description: null,
+        config: {},
+      };
+
+      await pool.query(
+        `
+          INSERT INTO sync_meta (user_id, entity_id, entity_type, version, op, timestamp, payload, device_id, diff)
+          VALUES ($1, $2, 'deck', $3, 'create', $4, $5, $6, NULL);
+        `,
+        [TEST_USER_ID, entityId, 1, timestamp, payload, 'seed-device']
+      );
+    }
+
+    const pageLimit = 5;
+    const collectedOps: any[] = [];
+    let continuation: string | undefined;
+    let iterations = 0;
+
+    while (true) {
+      const params = new URLSearchParams({
+        sinceVersion: '0',
+        limit: pageLimit.toString(),
+      });
+
+      if (continuation) {
+        params.set('continuationToken', continuation);
+      }
+
+      const response = await fetch(`${baseUrl}/pull?${params.toString()}`);
+      expect(response.status).toBe(200);
+
+      const body = await response.json();
+      collectedOps.push(...body.ops);
+
+      if (body.hasMore) {
+        expect(typeof body.continuationToken).toBe('string');
+        continuation = body.continuationToken;
+      } else {
+        expect(body.continuationToken).toBeNull();
+        continuation = undefined;
+      }
+
+      iterations += 1;
+      expect(iterations).toBeLessThan(10);
+
+      if (!body.hasMore) {
+        break;
+      }
+    }
+
+    expect(collectedOps).toHaveLength(totalOps);
+    const expectedIds = Array.from({ length: totalOps }, (_, index) => `deck-${index + 1}`);
+    expect(collectedOps.map((op: any) => op.entityId)).toEqual(expectedIds);
+    const uniqueKeys = new Set(collectedOps.map((op: any) => `${op.entityId}:${op.version}`));
+    expect(uniqueKeys.size).toBe(totalOps);
+    expect(collectedOps[collectedOps.length - 1].version).toBe(1);
   });
 
   it('returns 409 conflicts for stale versions and leaves state untouched', async () => {

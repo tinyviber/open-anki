@@ -128,6 +128,12 @@ export type PushBody = z.infer<typeof pushBodySchema>;
 export const DEFAULT_PULL_LIMIT = 100;
 export const DEFAULT_PULL_DEVICE_ID = 'unknown-device';
 
+export const continuationTokenSchema = z
+  .string()
+  .regex(/^[0-9]+:[0-9]+$/, 'Continuation tokens must be in the form "version:id".');
+
+export type ContinuationToken = z.infer<typeof continuationTokenSchema>;
+
 export const pullQuerySchema = z.object({
   sinceVersion: z.coerce.number().int().nonnegative(),
   limit: z.coerce
@@ -136,6 +142,7 @@ export const pullQuerySchema = z.object({
     .positive()
     .default(DEFAULT_PULL_LIMIT),
   deviceId: z.string().trim().min(1).default(DEFAULT_PULL_DEVICE_ID),
+  continuationToken: continuationTokenSchema.optional(),
 });
 
 export type PullQuery = z.infer<typeof pullQuerySchema>;
@@ -150,6 +157,31 @@ export type PushResponse = z.infer<typeof pushResponseSchema>;
 export const pullResponseSchema = z.object({
   ops: z.array(syncOpSchema),
   newVersion: z.number(),
+  hasMore: z.boolean(),
+  continuationToken: continuationTokenSchema.nullable(),
 });
 
 export type PullResponse = z.infer<typeof pullResponseSchema>;
+
+export function encodeContinuationToken(version: number, id: number): ContinuationToken {
+  if (!Number.isInteger(version) || version < 0) {
+    throw new Error(`Invalid version for continuation token: ${version}`);
+  }
+  if (!Number.isInteger(id) || id < 0) {
+    throw new Error(`Invalid id for continuation token: ${id}`);
+  }
+  return `${version}:${id}`;
+}
+
+export function decodeContinuationToken(token: ContinuationToken): { version: number; id: number } {
+  const [versionPart, idPart] = token.split(':');
+  const version = Number.parseInt(versionPart, 10);
+  const id = Number.parseInt(idPart, 10);
+  if (!Number.isInteger(version) || version < 0) {
+    throw new Error(`Invalid version component in continuation token: ${token}`);
+  }
+  if (!Number.isInteger(id) || id < 0) {
+    throw new Error(`Invalid id component in continuation token: ${token}`);
+  }
+  return { version, id };
+}
