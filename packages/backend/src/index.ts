@@ -3,23 +3,27 @@ import cors from '@fastify/cors';
 import { syncRoutes } from './routes/syncRoutes.js';
 import { verifyJWT } from './auth/authPlugin.js';
 
-const isProduction = process.env.NODE_ENV === 'production';
+const nodeEnv = process.env.NODE_ENV ?? 'development';
+const isProduction = nodeEnv === 'production';
+const isTest = nodeEnv === 'test';
 const loggerLevel = process.env.LOG_LEVEL || (isProduction ? 'info' : 'debug');
 
 export async function buildApp() {
     const fastify = Fastify({
-        logger: isProduction
+        logger: isTest
+            ? false
+            : isProduction
             ? { level: loggerLevel }
             : {
-                level: loggerLevel,
-                transport: {
-                    target: 'pino-pretty',
-                    options: {
-                        colorize: true,
-                        translateTime: 'SYS:standard',
-                    },
-                },
-            },
+                  level: loggerLevel,
+                  transport: {
+                      target: 'pino-pretty',
+                      options: {
+                          colorize: true,
+                          translateTime: 'SYS:standard',
+                      },
+                  },
+              },
     });
 
     // 1. CORS 配置

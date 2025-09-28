@@ -11,6 +11,7 @@ import {
     type NotePayload,
     type PullResponse,
     type ReviewLogPayload,
+    type SessionResponse,
     type SyncOp,
     cardPayloadSchema,
     deckPayloadSchema,
@@ -19,6 +20,7 @@ import {
     pullResponseSchema,
     pushBodySchema,
     pushResponseSchema,
+    sessionResponseSchema,
     reviewLogPayloadSchema,
     DEFAULT_PULL_DEVICE_ID,
     DEFAULT_PULL_LIMIT,
@@ -51,6 +53,10 @@ interface DeviceProgressRow {
     last_version: number | string;
     last_meta_id: number | string | null;
     continuation_token: string | null;
+}
+
+interface LatestVersionRow {
+    latest_version: number | string | null;
 }
 
 interface ConflictDetail {
@@ -99,6 +105,40 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
     fastify.setValidatorCompiler(validatorCompiler);
     fastify.setSerializerCompiler(serializerCompiler);
     const typedFastify = fastify.withTypeProvider<ZodTypeProvider>();
+
+    typedFastify.get(
+      '/session',
+      {
+          schema: {
+              response: {
+                  200: sessionResponseSchema,
+              },
+          },
+      },
+      async request => {
+        const userId = request.user.id;
+        const latestVersionResult = await query(
+            `
+                SELECT COALESCE(MAX(version), 0) AS latest_version
+                FROM sync_meta
+                WHERE user_id = $1;
+            `,
+            [userId]
+        );
+
+        const latestVersionRow = latestVersionResult.rows[0] as LatestVersionRow | undefined;
+        const latestVersion = toNumberOrNull(latestVersionRow?.latest_version) ?? 0;
+
+        const response: SessionResponse = {
+            userId,
+            latestVersion,
+            serverTimestamp: Date.now(),
+            defaultPullLimit: DEFAULT_PULL_LIMIT,
+        };
+
+        return response;
+      }
+    );
 
     typedFastify.post(
       '/push',
