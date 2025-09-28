@@ -20,7 +20,7 @@ export type NotePayload = z.infer<typeof notePayloadSchema>;
 export const cardPayloadSchema = z.object({
   note_id: z.string(),
   ordinal: z.number(),
-  due: z.number(),
+  due: z.number().nullable(),
   interval: z.number(),
   ease_factor: z.number(),
   reps: z.number(),
@@ -34,7 +34,7 @@ export type CardPayload = z.infer<typeof cardPayloadSchema>;
 
 export const reviewLogPayloadSchema = z.object({
   card_id: z.string(),
-  timestamp: z.number(),
+  timestamp: z.number().nullable(),
   rating: z.number(),
   duration_ms: z.number().nullable().optional(),
 });
