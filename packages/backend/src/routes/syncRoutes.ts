@@ -1,80 +1,35 @@
-import { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import { type FastifyPluginAsync } from 'fastify';
+import { type ZodType } from 'zod';
+import {
+    type ZodTypeProvider,
+    serializerCompiler,
+    validatorCompiler,
+} from 'fastify-type-provider-zod';
+import {
+    type CardPayload,
+    type DeckPayload,
+    type NotePayload,
+    type PullResponse,
+    type ReviewLogPayload,
+    type SyncOp,
+    cardPayloadSchema,
+    deckPayloadSchema,
+    notePayloadSchema,
+    pullQuerySchema,
+    pullResponseSchema,
+    pushBodySchema,
+    pushResponseSchema,
+    reviewLogPayloadSchema,
+} from '../../../shared/src/sync.js';
 import { getQueryClient, query, type QueryClient } from '../db/pg-service.js';
 
-type EntityType = 'deck' | 'note' | 'card' | 'review_log';
-type OperationType = 'create' | 'update' | 'delete';
+type EntityType = SyncOp['entityType'];
+type OperationType = SyncOp['op'];
 
-interface DeckPayload {
-    name: string;
-    description?: string | null;
-    config?: Record<string, unknown> | null;
-}
-
-interface NotePayload {
-    deck_id: string;
-    model_name: string;
-    fields: Record<string, unknown>;
-    tags?: string[] | null;
-}
-
-interface CardPayload {
-    note_id: string;
-    ordinal: number;
-    due?: number | null;
-    interval?: number | null;
-    ease_factor?: number | null;
-    reps?: number | null;
-    lapses?: number | null;
-    card_type?: number | null;
-    queue?: number | null;
-    original_due?: number | null;
-}
-
-interface ReviewLogPayload {
-    card_id: string;
-    timestamp?: number | null;
-    rating: number;
-    duration_ms?: number | null;
-}
-
-interface BaseOp {
-    entityId: string;
-    entityType: EntityType;
-    version: number;
-    op: OperationType;
-    timestamp: number;
-}
-
-type CreateOrUpdateOp<TPayload> = BaseOp & {
-    op: 'create' | 'update';
-    payload: TPayload;
-};
-
-type DeleteOp = BaseOp & {
-    op: 'delete';
-    payload?: undefined;
-};
-
-type DeckOp = (CreateOrUpdateOp<DeckPayload> | DeleteOp) & { entityType: 'deck' };
-type NoteOp = (CreateOrUpdateOp<NotePayload> | DeleteOp) & { entityType: 'note' };
-type CardOp = (CreateOrUpdateOp<CardPayload> | DeleteOp) & { entityType: 'card' };
-type ReviewLogOp = (CreateOrUpdateOp<ReviewLogPayload> | DeleteOp) & { entityType: 'review_log' };
-
-type SyncOp = DeckOp | NoteOp | CardOp | ReviewLogOp;
-
-interface PushBody {
-    deviceId: string;
-    ops: SyncOp[];
-}
-
-interface PullQuery {
-    sinceVersion: string;
-}
-
-interface PullResponse {
-    ops: SyncOp[];
-    newVersion: number;
-}
+type DeckOp = Extract<SyncOp, { entityType: 'deck' }>;
+type NoteOp = Extract<SyncOp, { entityType: 'note' }>;
+type CardOp = Extract<SyncOp, { entityType: 'card' }>;
+type ReviewLogOp = Extract<SyncOp, { entityType: 'review_log' }>;
 
 interface SyncMetaRow {
     entity_id: string;
@@ -82,40 +37,27 @@ interface SyncMetaRow {
     version: number;
     op: OperationType;
     timestamp: Date | string | number;
-    payload?: Record<string, unknown> | null;
+    payload?: unknown;
 }
 
 export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
+    fastify.setValidatorCompiler(validatorCompiler);
+    fastify.setSerializerCompiler(serializerCompiler);
+    const typedFastify = fastify.withTypeProvider<ZodTypeProvider>();
 
-    fastify.post<{ Body: PushBody }>(
+    typedFastify.post(
       '/push',
-      { schema: { 
-          body: {
-              type: 'object',
-              required: ['deviceId', 'ops'],
-              properties: { 
-                  deviceId: { type: 'string' }, 
-                  ops: { type: 'array', items: {
-                      type: 'object',
-                      required: ['entityId', 'entityType', 'version', 'op', 'timestamp'],
-                      properties: {
-                          entityId: { type: 'string' },
-                          entityType: { type: 'string', enum: ['deck', 'note', 'card', 'review_log'] },
-                          version: { type: 'number' },
-                          op: { type: 'string', enum: ['create', 'update', 'delete'] },
-                          timestamp: { type: 'number' }
-                      }
-                  } }
-              } 
+      {
+          schema: {
+              body: pushBodySchema,
+              response: {
+                  200: pushResponseSchema,
+              },
           },
-      }},
-      async (request: FastifyRequest<{ Body: PushBody }>, reply) => {
-        const userId = request.user.id; 
-        const { deviceId, ops } = request.body;
-        
-        if (!ops || ops.length === 0) {
-            return { message: "No operations received.", currentVersion: Date.now() };
-        }
+      },
+      async (request, reply) => {
+        const userId = request.user.id;
+        const { ops } = request.body;
 
         let latestVersion = 0;
 
@@ -125,7 +67,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
             await client.query('BEGIN');
 
             for (const op of ops) {
-                if (op.version == null) { op.version = Date.now(); }
+                const version = op.version;
 
                 // 1. Write to sync_meta (for conflict resolution/versioning)
                 const syncMetaInsert = `
@@ -140,10 +82,10 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                     userId,
                     op.entityId,
                     op.entityType,
-                    op.version,
+                    version,
                     op.op,
                     timestamp,
-                    op.payload ?? null
+                    'payload' in op ? op.payload : null,
                 ]);
 
                 // 2. Handle entity operations based on type and operation
@@ -162,7 +104,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                         break;
                 }
 
-                latestVersion = Math.max(latestVersion, op.version);
+                latestVersion = Math.max(latestVersion, version);
             }
 
             await client.query('COMMIT');
@@ -181,25 +123,19 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
         }
     });
 
-    fastify.get<{ Querystring: PullQuery }>(
+    typedFastify.get(
       '/pull',
-      { schema: { 
-          querystring: { 
-              type: 'object', 
-              required: ['sinceVersion'],
-              properties: { 
-                  sinceVersion: { type: 'string' } 
-              } 
-          }
-      }},
-      async (request: FastifyRequest<{ Querystring: PullQuery }>, reply) => {
-        const userId = request.user.id; 
-        const sinceVersion = parseInt(request.query.sinceVersion, 10);
-        
-        if (isNaN(sinceVersion)) {
-            reply.code(400).send({ error: 'Invalid or missing sinceVersion parameter.' });
-            return;
-        }
+      {
+          schema: {
+              querystring: pullQuerySchema,
+              response: {
+                  200: pullResponseSchema,
+              },
+          },
+      },
+      async (request, reply) => {
+        const userId = request.user.id;
+        const { sinceVersion } = request.query;
 
         try {
             // Fetch SyncMeta records that happened AFTER the client's version.
@@ -218,10 +154,12 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
 
             const highestVersion = ops.length > 0 ? ops[ops.length - 1].version : sinceVersion;
 
-            return reply.send<PullResponse>({
+            const response: PullResponse = {
                 ops,
                 newVersion: highestVersion,
-            });
+            };
+
+            return reply.send(response);
 
         } catch (error) {
             fastify.log.error("Sync Pull failed:", error);
@@ -318,7 +256,7 @@ async function handleCardOperation(client: QueryClient, userId: string, op: Card
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             ON CONFLICT (id) DO NOTHING;
         `;
-        const due = payload.due != null ? new Date(payload.due) : new Date();
+        const due = new Date(payload.due);
         const originalDue = payload.original_due ?? null;
         await client.query(insertQuery, [
             op.entityId,
@@ -326,12 +264,12 @@ async function handleCardOperation(client: QueryClient, userId: string, op: Card
             payload.note_id,
             payload.ordinal,
             due,
-            payload.interval ?? 0,
-            payload.ease_factor ?? 2.5,
-            payload.reps ?? 0,
-            payload.lapses ?? 0,
-            payload.card_type ?? 0,
-            payload.queue ?? 0,
+            payload.interval,
+            payload.ease_factor,
+            payload.reps,
+            payload.lapses,
+            payload.card_type,
+            payload.queue,
             originalDue,
         ]);
     } else if (op.op === 'update') {
@@ -342,18 +280,18 @@ async function handleCardOperation(client: QueryClient, userId: string, op: Card
                 reps = $6, lapses = $7, card_type = $8, queue = $9, original_due = $10, updated_at = NOW()
             WHERE id = $11 AND user_id = $12;
         `;
-        const due = payload.due != null ? new Date(payload.due) : new Date();
+        const due = new Date(payload.due);
         const originalDue = payload.original_due ?? null;
         await client.query(updateQuery, [
             payload.note_id,
             payload.ordinal,
             due,
-            payload.interval ?? 0,
-            payload.ease_factor ?? 2.5,
-            payload.reps ?? 0,
-            payload.lapses ?? 0,
-            payload.card_type ?? 0,
-            payload.queue ?? 0,
+            payload.interval,
+            payload.ease_factor,
+            payload.reps,
+            payload.lapses,
+            payload.card_type,
+            payload.queue,
             originalDue,
             op.entityId,
             userId,
@@ -407,12 +345,11 @@ async function fetchEntityData(userId: string, entityId: string, entityType: Ent
         );
         const row = result.rows[0];
         if (!row) return null;
-        const payload: DeckPayload = {
+        return deckPayloadSchema.parse({
             name: row.name,
             description: row.description ?? null,
             config: row.config ?? {},
-        };
-        return payload;
+        });
     }
     if (entityType === 'note') {
         const result = await query(
@@ -421,13 +358,12 @@ async function fetchEntityData(userId: string, entityId: string, entityType: Ent
         );
         const row = result.rows[0];
         if (!row) return null;
-        const payload: NotePayload = {
+        return notePayloadSchema.parse({
             deck_id: row.deck_id,
             model_name: row.model_name,
             fields: row.fields,
             tags: row.tags ?? [],
-        };
-        return payload;
+        });
     }
     if (entityType === 'card') {
         const result = await query(
@@ -436,19 +372,18 @@ async function fetchEntityData(userId: string, entityId: string, entityType: Ent
         );
         const row = result.rows[0];
         if (!row) return null;
-        const payload: CardPayload = {
+        return cardPayloadSchema.parse({
             note_id: row.note_id,
             ordinal: row.ordinal,
-            due: toMillisOrNull(row.due),
-            interval: row.interval ?? null,
-            ease_factor: row.ease_factor ?? null,
-            reps: row.reps ?? null,
-            lapses: row.lapses ?? null,
-            card_type: row.card_type ?? null,
-            queue: row.queue ?? null,
+            due: row.due ? toMillis(row.due) : Date.now(),
+            interval: Number(row.interval ?? 0),
+            ease_factor: Number(row.ease_factor ?? 0),
+            reps: Number(row.reps ?? 0),
+            lapses: Number(row.lapses ?? 0),
+            card_type: Number(row.card_type ?? 0),
+            queue: Number(row.queue ?? 0),
             original_due: row.original_due ?? null,
-        };
-        return payload;
+        });
     }
     const result = await query(
         'SELECT card_id, timestamp, rating, duration_ms FROM review_logs WHERE id = $1 AND user_id = $2',
@@ -456,13 +391,12 @@ async function fetchEntityData(userId: string, entityId: string, entityType: Ent
     );
     const row = result.rows[0];
     if (!row) return null;
-    const payload: ReviewLogPayload = {
+    return reviewLogPayloadSchema.parse({
         card_id: row.card_id,
-        timestamp: toMillisOrNull(row.timestamp),
+        timestamp: row.timestamp ? toMillis(row.timestamp) : Date.now(),
         rating: row.rating,
         duration_ms: row.duration_ms ?? null,
-    };
-    return payload;
+    });
 }
 
 async function mapMetaRowToOp(row: SyncMetaRow, userId: string): Promise<SyncOp> {
@@ -471,7 +405,7 @@ async function mapMetaRowToOp(row: SyncMetaRow, userId: string): Promise<SyncOp>
 
     if (row.entity_type === 'deck') {
         if (row.op === 'create' || row.op === 'update') {
-            const payload = resolvePayload(await fetchEntityData(userId, row.entity_id, 'deck'), row) as DeckPayload;
+            const payload = resolvePayload(await fetchEntityData(userId, row.entity_id, 'deck'), row, deckPayloadSchema);
             const op: DeckOp = {
                 entityId: row.entity_id,
                 entityType: 'deck',
@@ -494,7 +428,7 @@ async function mapMetaRowToOp(row: SyncMetaRow, userId: string): Promise<SyncOp>
 
     if (row.entity_type === 'note') {
         if (row.op === 'create' || row.op === 'update') {
-            const payload = resolvePayload(await fetchEntityData(userId, row.entity_id, 'note'), row) as NotePayload;
+            const payload = resolvePayload(await fetchEntityData(userId, row.entity_id, 'note'), row, notePayloadSchema);
             const op: NoteOp = {
                 entityId: row.entity_id,
                 entityType: 'note',
@@ -517,7 +451,7 @@ async function mapMetaRowToOp(row: SyncMetaRow, userId: string): Promise<SyncOp>
 
     if (row.entity_type === 'card') {
         if (row.op === 'create' || row.op === 'update') {
-            const payload = resolvePayload(await fetchEntityData(userId, row.entity_id, 'card'), row) as CardPayload;
+            const payload = resolvePayload(await fetchEntityData(userId, row.entity_id, 'card'), row, cardPayloadSchema);
             const op: CardOp = {
                 entityId: row.entity_id,
                 entityType: 'card',
@@ -539,7 +473,7 @@ async function mapMetaRowToOp(row: SyncMetaRow, userId: string): Promise<SyncOp>
     }
 
     if (row.op === 'create' || row.op === 'update') {
-        const payload = resolvePayload(await fetchEntityData(userId, row.entity_id, 'review_log'), row) as ReviewLogPayload;
+        const payload = resolvePayload(await fetchEntityData(userId, row.entity_id, 'review_log'), row, reviewLogPayloadSchema);
         const op: ReviewLogOp = {
             entityId: row.entity_id,
             entityType: 'review_log',
@@ -574,26 +508,12 @@ function toMillis(value: Date | string | number): number {
     return millis;
 }
 
-function toMillisOrNull(value: Date | string | number | null | undefined): number | null {
-    if (value === null || value === undefined) {
-        return null;
-    }
-    if (value instanceof Date) {
-        return value.getTime();
-    }
-    if (typeof value === 'number') {
-        return value;
-    }
-    const millis = new Date(value).getTime();
-    return Number.isNaN(millis) ? null : millis;
-}
-
-function resolvePayload<T>(payload: T | null, row: SyncMetaRow): T {
+function resolvePayload<T>(payload: T | null, row: SyncMetaRow, schema: ZodType<T>): T {
     if (payload) {
-        return payload;
+        return schema.parse(payload);
     }
-    if (row.payload) {
-        return row.payload as T;
+    if (row.payload != null) {
+        return schema.parse(row.payload);
     }
     throw new Error(`Missing payload for ${row.entity_type} ${row.entity_id} (${row.op})`);
 }

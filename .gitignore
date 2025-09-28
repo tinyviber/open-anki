@@ -4,3 +4,6 @@ repomix-output*
 
 
 supabase
+node_modules/
+packages/*/node_modules/
+dist/

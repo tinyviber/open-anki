@@ -20,8 +20,10 @@
     "@fastify/jwt": "^8.0.0",
     "@fastify/postgres": "^5.2.2",
     "fastify": "^4.27.0",
+    "fastify-type-provider-zod": "^2.0.0",
     "jsonwebtoken": "^9.0.2",
-    "pg": "^8.11.5"
+    "pg": "^8.11.5",
+    "zod": "^3.23.8"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"

@@ -43,7 +43,15 @@ describe('buildApp auth preHandler', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         deviceId: 'test-device',
-        ops: [],
+        ops: [
+          {
+            entityId: 'deck-1',
+            entityType: 'deck',
+            version: Date.now(),
+            op: 'delete',
+            timestamp: Date.now(),
+          },
+        ],
       }),
     });
 
