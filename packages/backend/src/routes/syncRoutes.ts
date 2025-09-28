@@ -1,5 +1,5 @@
 import { FastifyPluginAsync, FastifyRequest } from 'fastify';
-import { query } from '../db/pg-service.js';
+import { getQueryClient, query, type QueryClient } from '../db/pg-service.js';
 
 interface OpLog {
     entityId: string;
@@ -53,8 +53,10 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
 
         let latestVersion = 0;
 
+        const client = await getQueryClient();
+
         try {
-            await query('BEGIN'); 
+            await client.query('BEGIN');
 
             for (const op of ops) {
                 if (!op.version) { op.version = Date.now(); } // Fallback
@@ -68,31 +70,37 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                 const timestampValue = Number.isFinite(op.timestamp) ? op.timestamp : Date.now();
                 const timestamp = new Date(timestampValue);
 
-                await query(syncMetaInsert, [
+                await client.query(syncMetaInsert, [
                     userId, op.entityId, op.entityType, op.version, op.op, timestamp, op.payload || null
                 ]);
 
                 // 2. Handle entity operations based on type and operation
                 if (op.entityType === 'deck') {
-                    await handleDeckOperation(userId, op);
+                    await handleDeckOperation(client, userId, op);
                 } else if (op.entityType === 'note') {
-                    await handleNoteOperation(userId, op);
+                    await handleNoteOperation(client, userId, op);
                 } else if (op.entityType === 'card') {
-                    await handleCardOperation(userId, op);
+                    await handleCardOperation(client, userId, op);
                 } else if (op.entityType === 'review_log') {
-                    await handleReviewLogOperation(userId, op);
+                    await handleReviewLogOperation(client, userId, op);
                 }
 
                 latestVersion = Math.max(latestVersion, op.version);
             }
 
-            await query('COMMIT'); 
-            
+            await client.query('COMMIT');
+
             return reply.send({ message: `${ops.length} ops processed.`, currentVersion: latestVersion });
         } catch (error: any) {
-            await query('ROLLBACK');
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                fastify.log.error({ err: rollbackError }, 'Rollback failed');
+            }
             fastify.log.error({ err: error }, 'Sync Push Transaction failed');
             return reply.code(500).send({ error: 'Synchronization failed due to a server error.' });
+        } finally {
+            client.release();
         }
     });
 
@@ -156,7 +164,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
 };
 
 // Helper functions to handle different entity types
-async function handleDeckOperation(userId: string, op: OpLog) {
+async function handleDeckOperation(client: QueryClient, userId: string, op: OpLog) {
     if (!op.payload) return;
 
     if (op.op === 'create') {
@@ -165,7 +173,7 @@ async function handleDeckOperation(userId: string, op: OpLog) {
             VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (id) DO NOTHING;
         `;
-        await query(insertQuery, [
+        await client.query(insertQuery, [
             op.entityId, userId, op.payload.name, op.payload.description, op.payload.config || {}
         ]);
     } else if (op.op === 'update') {
@@ -174,7 +182,7 @@ async function handleDeckOperation(userId: string, op: OpLog) {
             SET name = $1, description = $2, config = $3, updated_at = NOW()
             WHERE id = $4 AND user_id = $5;
         `;
-        await query(updateQuery, [
+        await client.query(updateQuery, [
             op.payload.name, op.payload.description, op.payload.config || {}, op.entityId, userId
         ]);
     } else if (op.op === 'delete') {
@@ -182,11 +190,11 @@ async function handleDeckOperation(userId: string, op: OpLog) {
             DELETE FROM decks
             WHERE id = $1 AND user_id = $2;
         `;
-        await query(deleteQuery, [op.entityId, userId]);
+        await client.query(deleteQuery, [op.entityId, userId]);
     }
 }
 
-async function handleNoteOperation(userId: string, op: OpLog) {
+async function handleNoteOperation(client: QueryClient, userId: string, op: OpLog) {
     if (!op.payload) return;
 
     if (op.op === 'create') {
@@ -195,7 +203,7 @@ async function handleNoteOperation(userId: string, op: OpLog) {
             VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT (id) DO NOTHING;
         `;
-        await query(insertQuery, [
+        await client.query(insertQuery, [
             op.entityId, userId, op.payload.deck_id, op.payload.model_name, 
             op.payload.fields, op.payload.tags || []
         ]);
@@ -205,7 +213,7 @@ async function handleNoteOperation(userId: string, op: OpLog) {
             SET deck_id = $1, model_name = $2, fields = $3, tags = $4, updated_at = NOW()
             WHERE id = $5 AND user_id = $6;
         `;
-        await query(updateQuery, [
+        await client.query(updateQuery, [
             op.payload.deck_id, op.payload.model_name, op.payload.fields, 
             op.payload.tags || [], op.entityId, userId
         ]);
@@ -214,11 +222,11 @@ async function handleNoteOperation(userId: string, op: OpLog) {
             DELETE FROM notes
             WHERE id = $1 AND user_id = $2;
         `;
-        await query(deleteQuery, [op.entityId, userId]);
+        await client.query(deleteQuery, [op.entityId, userId]);
     }
 }
 
-async function handleCardOperation(userId: string, op: OpLog) {
+async function handleCardOperation(client: QueryClient, userId: string, op: OpLog) {
     if (!op.payload) return;
 
     if (op.op === 'create') {
@@ -228,7 +236,7 @@ async function handleCardOperation(userId: string, op: OpLog) {
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             ON CONFLICT (id) DO NOTHING;
         `;
-        await query(insertQuery, [
+        await client.query(insertQuery, [
             op.entityId, userId, op.payload.note_id, op.payload.ordinal, 
             op.payload.due || new Date(), op.payload.interval || 0, op.payload.ease_factor || 2.5,
             op.payload.reps || 0, op.payload.lapses || 0, op.payload.card_type || 0, 
@@ -241,7 +249,7 @@ async function handleCardOperation(userId: string, op: OpLog) {
                 reps = $6, lapses = $7, card_type = $8, queue = $9, original_due = $10, updated_at = NOW()
             WHERE id = $11 AND user_id = $12;
         `;
-        await query(updateQuery, [
+        await client.query(updateQuery, [
             op.payload.note_id, op.payload.ordinal, op.payload.due, op.payload.interval, 
             op.payload.ease_factor, op.payload.reps, op.payload.lapses, 
             op.payload.card_type, op.payload.queue, op.payload.original_due || 0, 
@@ -252,11 +260,11 @@ async function handleCardOperation(userId: string, op: OpLog) {
             DELETE FROM cards
             WHERE id = $1 AND user_id = $2;
         `;
-        await query(deleteQuery, [op.entityId, userId]);
+        await client.query(deleteQuery, [op.entityId, userId]);
     }
 }
 
-async function handleReviewLogOperation(userId: string, op: OpLog) {
+async function handleReviewLogOperation(client: QueryClient, userId: string, op: OpLog) {
     if (!op.payload) return;
 
     if (op.op === 'create') {
@@ -265,7 +273,7 @@ async function handleReviewLogOperation(userId: string, op: OpLog) {
             VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT (id) DO NOTHING;
         `;
-        await query(insertQuery, [
+        await client.query(insertQuery, [
             op.entityId, userId, op.payload.card_id, op.payload.timestamp || new Date(), 
             op.payload.rating, op.payload.duration_ms
         ]);
@@ -274,7 +282,7 @@ async function handleReviewLogOperation(userId: string, op: OpLog) {
             DELETE FROM review_logs
             WHERE id = $1 AND user_id = $2;
         `;
-        await query(deleteQuery, [op.entityId, userId]);
+        await client.query(deleteQuery, [op.entityId, userId]);
     }
     // Note: Review logs typically don't get updated, only created/deleted
 }
