@@ -131,7 +131,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                 const syncMetaInsert = `
                     INSERT INTO sync_meta (user_id, entity_id, entity_type, version, op, timestamp, payload)
                     VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    ON CONFLICT (entity_id, version) DO NOTHING;
+                    ON CONFLICT (user_id, entity_id, version) DO NOTHING;
                 `;
                 const timestampValue = Number.isFinite(op.timestamp) ? op.timestamp : Date.now();
                 const timestamp = new Date(timestampValue);
