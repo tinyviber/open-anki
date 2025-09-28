@@ -10,7 +10,8 @@
     "outDir": "dist",
     "sourceMap": true,
     "allowSyntheticDefaultImports": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "types": ["bun-types"]
   },
   "include": ["src/**/*", "declarations.d.ts"],
   "exclude": ["node_modules"]
