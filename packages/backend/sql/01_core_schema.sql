@@ -87,6 +87,8 @@ CREATE TABLE IF NOT EXISTS sync_meta (
     timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     -- Payload for additional operation data
     payload JSONB,
+    device_id TEXT NOT NULL DEFAULT 'unknown-device',
+    diff JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     -- Prevent duplicate operations
     UNIQUE(user_id, entity_id, version)
@@ -149,6 +151,7 @@ CREATE INDEX idx_review_logs_user_id ON review_logs(user_id);
 CREATE INDEX idx_review_logs_card_id ON review_logs(card_id);
 CREATE INDEX idx_sync_meta_user_id ON sync_meta(user_id);
 CREATE INDEX idx_sync_meta_entity ON sync_meta(entity_id, entity_type);
+CREATE INDEX idx_sync_meta_user_device ON sync_meta(user_id, device_id);
 
 -- Indexes for common queries
 CREATE INDEX idx_decks_created_at ON decks(created_at);
