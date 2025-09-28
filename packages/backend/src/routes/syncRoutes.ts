@@ -4,8 +4,8 @@ import { query } from '../db/pg-service.js';
 export interface OpLog {
     entityId: string;
     entityType: 'deck' | 'note' | 'card' | 'review_log';
-    version: number; 
-    op: 'create' | 'update' | 'delete'; 
+    version: number;
+    op: 'create' | 'update' | 'delete';
     timestamp: number;
     payload?: Record<string, any>;
 }
@@ -31,7 +31,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                   deviceId: { type: 'string' }, 
                   ops: { type: 'array', items: {
                       type: 'object',
-                      required: ['entityId', 'entityType', 'version', 'op'],
+                      required: ['entityId', 'entityType', 'version', 'op', 'timestamp'],
                       properties: {
                           entityId: { type: 'string' },
                           entityType: { type: 'string', enum: ['deck', 'note', 'card', 'review_log'] },
@@ -65,8 +65,11 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                     VALUES ($1, $2, $3, $4, $5, $6, $7)
                     ON CONFLICT (entity_id, version) DO NOTHING;
                 `;
+                const timestampValue = Number.isFinite(op.timestamp) ? op.timestamp : Date.now();
+                const timestamp = new Date(timestampValue);
+
                 await query(syncMetaInsert, [
-                    userId, op.entityId, op.entityType, op.version, op.op, op.timestamp, op.payload || null
+                    userId, op.entityId, op.entityType, op.version, op.op, timestamp, op.payload || null
                 ]);
 
                 // 2. Handle entity operations based on type and operation
@@ -88,8 +91,8 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
             return reply.send({ message: `${ops.length} ops processed.`, currentVersion: latestVersion });
         } catch (error: any) {
             await query('ROLLBACK');
-            fastify.log.error("Sync Push Transaction failed:", error);
-            reply.code(500).send({ error: 'Synchronization failed due to a server error.' });
+            fastify.log.error({ err: error }, 'Sync Push Transaction failed');
+            return reply.code(500).send({ error: 'Synchronization failed due to a server error.' });
         }
     });
 
