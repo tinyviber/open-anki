@@ -5,7 +5,8 @@
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun --watch src/index.ts",
-    "build": "tsc"
+    "build": "tsc",
+    "test": "bun test"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.6",
