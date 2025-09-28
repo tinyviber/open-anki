@@ -126,17 +126,10 @@ describe('syncRoutes timestamp handling', () => {
     await pool.query('DELETE FROM device_sync_progress;');
   });
 
-  afterAll(async () => {
-    await app.close();
-    await pool.end();
-    setTestPool(null);
-  });
-
-  it('stores millisecond timestamps as dates and returns them during pull', async () => {
-    const timestampMillis = Date.now();
-    const dueMillis = timestampMillis + 1_000;
-    const originalDueMillis = timestampMillis + 2_000;
-    const reviewTimestampMillis = timestampMillis + 3_000;
+  async function pushBasicSyncFixture(baseTimestamp: number) {
+    const dueMillis = baseTimestamp + 1_000;
+    const originalDueMillis = baseTimestamp + 2_000;
+    const reviewTimestampMillis = baseTimestamp + 3_000;
 
     const pushResponse = await fetch(`${baseUrl}/push`, {
       method: 'POST',
@@ -149,7 +142,7 @@ describe('syncRoutes timestamp handling', () => {
             entityType: 'deck',
             version: 1,
             op: 'create',
-            timestamp: timestampMillis,
+            timestamp: baseTimestamp,
             diff: { from: null, to: 'Test Deck' },
             payload: {
               name: 'Test Deck',
@@ -162,7 +155,7 @@ describe('syncRoutes timestamp handling', () => {
             entityType: 'note',
             version: 2,
             op: 'create',
-            timestamp: timestampMillis + 1,
+            timestamp: baseTimestamp + 1,
             payload: {
               deck_id: 'deck-1',
               model_name: 'Basic',
@@ -175,7 +168,7 @@ describe('syncRoutes timestamp handling', () => {
             entityType: 'card',
             version: 3,
             op: 'create',
-            timestamp: timestampMillis + 2,
+            timestamp: baseTimestamp + 2,
             payload: {
               note_id: 'note-1',
               ordinal: 0,
@@ -194,7 +187,7 @@ describe('syncRoutes timestamp handling', () => {
             entityType: 'review_log',
             version: 4,
             op: 'create',
-            timestamp: timestampMillis + 3,
+            timestamp: baseTimestamp + 3,
             payload: {
               card_id: 'card-1',
               timestamp: reviewTimestampMillis,
@@ -208,6 +201,20 @@ describe('syncRoutes timestamp handling', () => {
     expect(pushResponse.status).toBe(200);
     const pushBody = await pushResponse.json();
     expect(pushBody.currentVersion).toBe(4);
+
+    return { dueMillis, originalDueMillis, reviewTimestampMillis };
+  }
+
+  afterAll(async () => {
+    await app.close();
+    await pool.end();
+    setTestPool(null);
+  });
+
+  it('stores millisecond timestamps as dates and returns them during pull', async () => {
+    const timestampMillis = Date.now();
+    const { dueMillis, originalDueMillis, reviewTimestampMillis } =
+      await pushBasicSyncFixture(timestampMillis);
 
     const metaRows = await pool.query(
       'SELECT entity_type, version, timestamp, device_id, diff FROM sync_meta ORDER BY version ASC'
@@ -269,6 +276,36 @@ describe('syncRoutes timestamp handling', () => {
     expect(reviewOp.timestamp).toBe(timestampMillis + 3);
     expect(reviewOp.payload.timestamp).toBe(reviewTimestampMillis);
     expect(reviewOp.payload.duration_ms).toBe(1200);
+  });
+
+  it('returns null scheduling fields when database columns are null', async () => {
+    const timestampMillis = Date.now();
+    await pushBasicSyncFixture(timestampMillis);
+
+    await pool.query("UPDATE cards SET due = NULL WHERE id = 'card-1'");
+    await pool.query("UPDATE review_logs SET timestamp = NULL WHERE id = 'review-log-1'");
+
+    const pullResponse = await fetch(
+      `${baseUrl}/pull?sinceVersion=0&limit=50&deviceId=test-device`
+    );
+    expect(pullResponse.status).toBe(200);
+    const body = await pullResponse.json();
+
+    const cardOp = body.ops.find((op: any) => op.entityType === 'card');
+    expect(cardOp).toBeTruthy();
+    expect(cardOp.payload.due).toBeNull();
+
+    const reviewOp = body.ops.find((op: any) => op.entityType === 'review_log');
+    expect(reviewOp).toBeTruthy();
+    expect(reviewOp.payload.timestamp).toBeNull();
+
+    const cardRows = await pool.query('SELECT due FROM cards');
+    expect(cardRows.rows).toHaveLength(1);
+    expect(cardRows.rows[0].due).toBeNull();
+
+    const reviewRows = await pool.query('SELECT timestamp FROM review_logs');
+    expect(reviewRows.rows).toHaveLength(1);
+    expect(reviewRows.rows[0].timestamp).toBeNull();
   });
 
   it('streams operations across multiple pull pages using continuation tokens', async () => {
