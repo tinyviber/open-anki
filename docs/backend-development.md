@@ -17,6 +17,9 @@ introducing the bundled production build.
 - Environment variables can be supplied through your shell or a `.env` file.
   `NODE_ENV` defaults to `development` during local work which enables the
   pretty logger transport.
+- The sync service **requires** `SUPABASE_JWT_SECRET` to be set. This value must
+  match the JWT secret configured for your Supabase project so that incoming
+  tokens can be verified during request authentication.
 
 When you need a clean slate, stop the Supabase stack with `supabase stop` and
 reset the database with `supabase db reset`, then rerun `bun run migrate && bun
