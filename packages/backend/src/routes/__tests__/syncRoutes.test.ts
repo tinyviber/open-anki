@@ -199,13 +199,19 @@ describe('syncRoutes timestamp handling', () => {
       expect((row.timestamp as Date).getTime()).toBe(timestampMillis + index);
     });
 
-    const cardRows = await pool.query('SELECT due, original_due FROM cards');
+    const cardRows = await pool.query('SELECT due, original_due, interval, ease_factor, reps, lapses, card_type, queue FROM cards');
     expect(cardRows.rows).toHaveLength(1);
     const cardRow = cardRows.rows[0];
     expect(cardRow.due).toBeInstanceOf(Date);
     expect((cardRow.due as Date).getTime()).toBe(dueMillis);
     expect(typeof cardRow.original_due).toBe('number');
     expect(cardRow.original_due).toBe(originalDueMillis);
+    expect(cardRow.interval).toBe(0);
+    expect(cardRow.ease_factor).toBeCloseTo(2.5);
+    expect(cardRow.reps).toBe(0);
+    expect(cardRow.lapses).toBe(0);
+    expect(cardRow.card_type).toBe(1);
+    expect(cardRow.queue).toBe(0);
 
     const reviewRows = await pool.query('SELECT timestamp FROM review_logs');
     expect(reviewRows.rows).toHaveLength(1);
@@ -219,13 +225,21 @@ describe('syncRoutes timestamp handling', () => {
 
     const cardOp = body.ops.find((op: any) => op.entityType === 'card');
     expect(cardOp).toBeTruthy();
+    expect(typeof cardOp.timestamp).toBe('number');
     expect(cardOp.timestamp).toBe(timestampMillis + 2);
     expect(cardOp.payload.due).toBe(dueMillis);
     expect(cardOp.payload.original_due).toBe(originalDueMillis);
+    expect(cardOp.payload.interval).toBe(0);
+    expect(cardOp.payload.ease_factor).toBe(2.5);
+    expect(cardOp.payload.reps).toBe(0);
+    expect(cardOp.payload.lapses).toBe(0);
+    expect(cardOp.payload.card_type).toBe(1);
+    expect(cardOp.payload.queue).toBe(0);
     expect('user_id' in cardOp.payload).toBe(false);
 
     const reviewOp = body.ops.find((op: any) => op.entityType === 'review_log');
     expect(reviewOp).toBeTruthy();
+    expect(typeof reviewOp.timestamp).toBe('number');
     expect(reviewOp.timestamp).toBe(timestampMillis + 3);
     expect(reviewOp.payload.timestamp).toBe(reviewTimestampMillis);
     expect(reviewOp.payload.duration_ms).toBe(1200);
