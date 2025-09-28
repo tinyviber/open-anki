@@ -6,6 +6,7 @@ type EntityType = 'deck' | 'note' | 'card' | 'review_log';
 interface OpLog {
     entityId: string;
     entityType: EntityType;
+
     version: number;
     op: 'create' | 'update' | 'delete';
     timestamp: number;
@@ -101,7 +102,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                   deviceId: { type: 'string' }, 
                   ops: { type: 'array', items: {
                       type: 'object',
-                      required: ['entityId', 'entityType', 'version', 'op'],
+                      required: ['entityId', 'entityType', 'version', 'op', 'timestamp'],
                       properties: {
                           entityId: { type: 'string' },
                           entityType: { type: 'string', enum: ['deck', 'note', 'card', 'review_log'] },
@@ -118,10 +119,44 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
         const { ops } = request.body;
 
         try {
-            const response = await processPushOperations(userId, ops);
-            return reply.send(response);
+            await query('BEGIN'); 
+
+            for (const op of ops) {
+                if (!op.version) { op.version = Date.now(); } // Fallback
+
+                // 1. Write to sync_meta (for conflict resolution/versioning)
+                const syncMetaInsert = `
+                    INSERT INTO sync_meta (user_id, entity_id, entity_type, version, op, timestamp, payload)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT (entity_id, version) DO NOTHING;
+                `;
+                const timestampValue = Number.isFinite(op.timestamp) ? op.timestamp : Date.now();
+                const timestamp = new Date(timestampValue);
+
+                await query(syncMetaInsert, [
+                    userId, op.entityId, op.entityType, op.version, op.op, timestamp, op.payload || null
+                ]);
+
+                // 2. Handle entity operations based on type and operation
+                if (op.entityType === 'deck') {
+                    await handleDeckOperation(userId, op);
+                } else if (op.entityType === 'note') {
+                    await handleNoteOperation(userId, op);
+                } else if (op.entityType === 'card') {
+                    await handleCardOperation(userId, op);
+                } else if (op.entityType === 'review_log') {
+                    await handleReviewLogOperation(userId, op);
+                }
+
+                latestVersion = Math.max(latestVersion, op.version);
+            }
+
+            await query('COMMIT'); 
+            
+            return reply.send({ message: `${ops.length} ops processed.`, currentVersion: latestVersion });
         } catch (error: any) {
-            fastify.log.error(error, "Sync Push Transaction failed");
+            await query('ROLLBACK');
+            fastify.log.error({ err: error }, 'Sync Push Transaction failed');
             return reply.code(500).send({ error: 'Synchronization failed due to a server error.' });
         }
     });
