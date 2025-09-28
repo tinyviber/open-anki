@@ -20,6 +20,8 @@ import {
     pushBodySchema,
     pushResponseSchema,
     reviewLogPayloadSchema,
+    DEFAULT_PULL_DEVICE_ID,
+    DEFAULT_PULL_LIMIT,
 } from '../../../shared/src/sync.js';
 import { getQueryClient, query, type QueryClient } from '../db/pg-service.js';
 
@@ -200,18 +202,27 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
       },
       async (request, reply) => {
         const userId = request.user.id;
-        const { sinceVersion } = request.query;
+        const { sinceVersion, limit = DEFAULT_PULL_LIMIT, deviceId = DEFAULT_PULL_DEVICE_ID } = request.query;
+
+        const effectiveLimit = Number.isFinite(limit) ? limit : DEFAULT_PULL_LIMIT;
+        const effectiveDeviceId = deviceId ?? DEFAULT_PULL_DEVICE_ID;
+
+        fastify.log.debug(
+            { userId, sinceVersion, limit: effectiveLimit, deviceId: effectiveDeviceId },
+            'Processing sync pull request'
+        );
 
         try {
             // Fetch SyncMeta records that happened AFTER the client's version.
             const metaResults = await query(
                 `
                 SELECT id, entity_id, entity_type, version, op, timestamp, payload
-                FROM sync_meta 
-                WHERE user_id = $1 AND version > $2 
-                ORDER BY version ASC;
+                FROM sync_meta
+                WHERE user_id = $1 AND version > $2
+                ORDER BY version ASC
+                LIMIT $3;
                 `,
-                [userId, sinceVersion]
+                [userId, sinceVersion, effectiveLimit]
             );
 
             const metaRows = metaResults.rows as SyncMetaRow[];

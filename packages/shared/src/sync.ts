@@ -125,8 +125,17 @@ export const pushBodySchema = z.object({
 
 export type PushBody = z.infer<typeof pushBodySchema>;
 
+export const DEFAULT_PULL_LIMIT = 100;
+export const DEFAULT_PULL_DEVICE_ID = 'unknown-device';
+
 export const pullQuerySchema = z.object({
   sinceVersion: z.coerce.number().int().nonnegative(),
+  limit: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(DEFAULT_PULL_LIMIT),
+  deviceId: z.string().trim().min(1).default(DEFAULT_PULL_DEVICE_ID),
 });
 
 export type PullQuery = z.infer<typeof pullQuerySchema>;
