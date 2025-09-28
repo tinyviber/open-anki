@@ -1,10 +1,16 @@
+import { createRequire } from 'node:module';
 import { Pool, PoolClient } from 'pg';
+
+const require = createRequire(import.meta.url);
+const { getDatabaseUrl } = require('../../scripts/getDatabaseUrl.cjs') as {
+  getDatabaseUrl: () => string;
+};
 
 type QueryablePool = Pick<Pool, 'query' | 'end' | 'connect'>;
 
 export type QueryClient = Pick<PoolClient, 'query' | 'release'>;
 
-const DEFAULT_CONNECTION_STRING = process.env.DATABASE_URL || "postgres://postgres:password@localhost:54322/postgres";
+const DEFAULT_CONNECTION_STRING = getDatabaseUrl();
 
 let activePool: QueryablePool | null = null;
 
