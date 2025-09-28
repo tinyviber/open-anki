@@ -319,7 +319,7 @@ async function handleCardOperation(client: QueryClient, userId: string, op: Card
             ON CONFLICT (id) DO NOTHING;
         `;
         const due = payload.due != null ? new Date(payload.due) : new Date();
-        const originalDue = payload.original_due != null ? new Date(payload.original_due) : null;
+        const originalDue = payload.original_due ?? null;
         await client.query(insertQuery, [
             op.entityId,
             userId,
@@ -343,7 +343,7 @@ async function handleCardOperation(client: QueryClient, userId: string, op: Card
             WHERE id = $11 AND user_id = $12;
         `;
         const due = payload.due != null ? new Date(payload.due) : new Date();
-        const originalDue = payload.original_due != null ? new Date(payload.original_due) : null;
+        const originalDue = payload.original_due ?? null;
         await client.query(updateQuery, [
             payload.note_id,
             payload.ordinal,
@@ -446,7 +446,7 @@ async function fetchEntityData(userId: string, entityId: string, entityType: Ent
             lapses: row.lapses ?? null,
             card_type: row.card_type ?? null,
             queue: row.queue ?? null,
-            original_due: toMillisOrNull(row.original_due),
+            original_due: row.original_due ?? null,
         };
         return payload;
     }
