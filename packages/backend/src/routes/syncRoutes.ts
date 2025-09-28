@@ -22,7 +22,7 @@ interface PullQuery {
 export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
 
     fastify.post<{ Body: PushBody }>(
-      '/sync/push', 
+      '/push',
       { schema: { 
           body: {
               type: 'object',
@@ -94,7 +94,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
     });
 
     fastify.get<{ Querystring: PullQuery }>(
-      '/sync/pull', 
+      '/pull',
       { schema: { 
           querystring: { 
               type: 'object', 
