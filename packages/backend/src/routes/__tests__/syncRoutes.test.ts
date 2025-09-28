@@ -27,6 +27,8 @@ describe('syncRoutes timestamp handling', () => {
         op TEXT NOT NULL,
         timestamp TIMESTAMPTZ NOT NULL,
         payload JSONB,
+        device_id TEXT NOT NULL,
+        diff JSONB,
         UNIQUE(user_id, entity_id, version)
       );
     `);
@@ -134,6 +136,7 @@ describe('syncRoutes timestamp handling', () => {
             version: 1,
             op: 'create',
             timestamp: timestampMillis,
+            diff: { from: null, to: 'Test Deck' },
             payload: {
               name: 'Test Deck',
               description: null,
@@ -192,12 +195,17 @@ describe('syncRoutes timestamp handling', () => {
     const pushBody = await pushResponse.json();
     expect(pushBody.currentVersion).toBe(4);
 
-    const metaRows = await pool.query('SELECT entity_type, version, timestamp FROM sync_meta ORDER BY version ASC');
+    const metaRows = await pool.query(
+      'SELECT entity_type, version, timestamp, device_id, diff FROM sync_meta ORDER BY version ASC'
+    );
     expect(metaRows.rows).toHaveLength(4);
     metaRows.rows.forEach((row, index) => {
       expect(row.timestamp).toBeInstanceOf(Date);
       expect((row.timestamp as Date).getTime()).toBe(timestampMillis + index);
+      expect(row.device_id).toBe('device-1');
     });
+    expect(metaRows.rows[0].diff).toEqual({ from: null, to: 'Test Deck' });
+    expect(metaRows.rows[1].diff).toBeNull();
 
     const cardRows = await pool.query('SELECT due, original_due, interval, ease_factor, reps, lapses, card_type, queue FROM cards');
     expect(cardRows.rows).toHaveLength(1);
@@ -243,5 +251,97 @@ describe('syncRoutes timestamp handling', () => {
     expect(reviewOp.timestamp).toBe(timestampMillis + 3);
     expect(reviewOp.payload.timestamp).toBe(reviewTimestampMillis);
     expect(reviewOp.payload.duration_ms).toBe(1200);
+  });
+
+  it('returns 409 conflicts for stale versions and leaves state untouched', async () => {
+    const createResponse = await fetch(`${baseUrl}/push`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        deviceId: 'device-1',
+        ops: [
+          {
+            entityId: 'deck-1',
+            entityType: 'deck',
+            version: 1,
+            op: 'create',
+            timestamp: Date.now(),
+            payload: {
+              name: 'Initial Deck',
+              description: null,
+              config: {},
+            },
+          },
+        ],
+      }),
+    });
+    expect(createResponse.status).toBe(200);
+
+    const stalePush = await fetch(`${baseUrl}/push`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        deviceId: 'device-2',
+        ops: [
+          {
+            entityId: 'deck-1',
+            entityType: 'deck',
+            version: 1,
+            op: 'update',
+            timestamp: Date.now(),
+            payload: {
+              name: 'Updated Deck',
+              description: 'stale write',
+              config: {},
+            },
+          },
+          {
+            entityId: 'note-1',
+            entityType: 'note',
+            version: 2,
+            op: 'create',
+            timestamp: Date.now(),
+            payload: {
+              deck_id: 'deck-1',
+              model_name: 'Basic',
+              fields: { Front: 'Q', Back: 'A' },
+              tags: [],
+            },
+          },
+        ],
+      }),
+    });
+
+    expect(stalePush.status).toBe(409);
+    const conflictBody = await stalePush.json();
+    expect(conflictBody.error).toContain('Sync conflict');
+    expect(conflictBody.guidance).toContain('/pull');
+    expect(conflictBody.conflicts).toEqual([
+      {
+        entityId: 'deck-1',
+        entityType: 'deck',
+        incomingVersion: 1,
+        currentVersion: 1,
+        lastSyncedDeviceId: 'device-1',
+        retryHint:
+          'Pull the latest changes from the server, merge them locally, and retry the push with incremented versions.',
+      },
+    ]);
+
+    const decks = await pool.query('SELECT name, description FROM decks');
+    expect(decks.rows).toEqual([
+      { name: 'Initial Deck', description: null },
+    ]);
+
+    const notes = await pool.query('SELECT * FROM notes');
+    expect(notes.rows).toHaveLength(0);
+
+    const syncMetaRows = await pool.query(
+      'SELECT version, device_id FROM sync_meta WHERE entity_id = $1 ORDER BY version ASC',
+      ['deck-1']
+    );
+    expect(syncMetaRows.rows).toHaveLength(1);
+    expect(Number(syncMetaRows.rows[0].version)).toBe(1);
+    expect(syncMetaRows.rows[0].device_id).toBe('device-1');
   });
 });

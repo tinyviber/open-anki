@@ -53,6 +53,7 @@ const baseOpSchema = z.object({
   version: z.number(),
   op: operationTypeSchema,
   timestamp: z.number(),
+  diff: z.unknown().optional(),
 });
 
 const createOrUpdateDeckOpSchema = baseOpSchema.extend({
