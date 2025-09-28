@@ -34,6 +34,18 @@ describe('syncRoutes timestamp handling', () => {
     `);
 
     await pool.query(`
+      CREATE TABLE device_sync_progress (
+        user_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        last_version BIGINT NOT NULL DEFAULT 0,
+        last_meta_id BIGINT,
+        continuation_token TEXT,
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (user_id, device_id)
+      );
+    `);
+
+    await pool.query(`
       CREATE TABLE decks (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
@@ -110,6 +122,7 @@ describe('syncRoutes timestamp handling', () => {
     await pool.query('DELETE FROM cards;');
     await pool.query('DELETE FROM notes;');
     await pool.query('DELETE FROM decks;');
+    await pool.query('DELETE FROM device_sync_progress;');
   });
 
   afterAll(async () => {

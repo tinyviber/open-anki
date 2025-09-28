@@ -135,7 +135,7 @@ export const continuationTokenSchema = z
 export type ContinuationToken = z.infer<typeof continuationTokenSchema>;
 
 export const pullQuerySchema = z.object({
-  sinceVersion: z.coerce.number().int().nonnegative(),
+  sinceVersion: z.coerce.number().int().nonnegative().optional(),
   limit: z.coerce
     .number()
     .int()

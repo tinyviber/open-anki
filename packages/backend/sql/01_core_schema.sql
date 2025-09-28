@@ -2,7 +2,7 @@
 -- This schema implements user isolation via Row Level Security (RLS)
 
 -- Cleanup: Drop tables if they exist to allow clean re-creation
-DROP TABLE IF EXISTS sync_meta, review_logs, cards, notes, decks CASCADE; 
+DROP TABLE IF EXISTS device_sync_progress, sync_meta, review_logs, cards, notes, decks CASCADE;
 
 -- 1. Enable Row Level Security (RLS) on the database
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -92,6 +92,17 @@ CREATE TABLE IF NOT EXISTS sync_meta (
     UNIQUE(user_id, entity_id, version)
 );
 
+-- Device sync progress table: Tracks per-device pull progress for resuming syncs
+CREATE TABLE IF NOT EXISTS device_sync_progress (
+    user_id UUID NOT NULL,
+    device_id TEXT NOT NULL,
+    last_version BIGINT NOT NULL DEFAULT 0,
+    last_meta_id BIGINT,
+    continuation_token TEXT,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    PRIMARY KEY (user_id, device_id)
+);
+
 -- 3. Row Level Security (RLS) Policies
 -- These ensure that users can only access their own data
 
@@ -122,6 +133,10 @@ ALTER TABLE sync_meta ENABLE ROW LEVEL SECURITY;
 CREATE POLICY sync_meta_isolation_policy ON sync_meta
     FOR ALL USING (user_id = auth.uid());
 
+ALTER TABLE device_sync_progress ENABLE ROW LEVEL SECURITY;
+CREATE POLICY device_sync_progress_isolation_policy ON device_sync_progress
+    FOR ALL USING (user_id = auth.uid());
+
 -- 4. Indexes for Performance
 
 -- Indexes for foreign key relationships
@@ -143,6 +158,7 @@ CREATE INDEX idx_cards_queue ON cards(queue);
 CREATE INDEX idx_review_logs_timestamp ON review_logs(timestamp);
 CREATE INDEX idx_sync_meta_version ON sync_meta(version);
 CREATE INDEX idx_sync_meta_user_version ON sync_meta(user_id, version); -- Critical for sync pull
+CREATE INDEX idx_device_sync_progress_user ON device_sync_progress(user_id);
 
 -- 5. Update trigger for "updated_at" columns
 CREATE OR REPLACE FUNCTION update_updated_at_column()
