@@ -17,12 +17,17 @@ const JWT_SECRET = process.env.SUPABASE_JWT_SECRET || 'your_super_secret_jwt_key
 /**
  * Decodes the Supabase JWT, validates it, and sets the user ID on the request object.
  */
-export async function verifyJWT(request: FastifyRequest, reply: FastifyReply) {
+const unauthorizedError = (message: string) => {
+    const error = new Error(message) as Error & { statusCode: number };
+    error.statusCode = 401;
+    return error;
+};
+
+export async function verifyJWT(request: FastifyRequest, _reply: FastifyReply) {
     const authHeader = request.headers.authorization;
-    
+
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        reply.code(401).send({ error: 'Missing or invalid Authorization header' });
-        throw new Error('Unauthorized');
+        throw unauthorizedError('Missing or invalid Authorization header');
     }
 
     const token = authHeader.split(' ')[1];
@@ -30,17 +35,15 @@ export async function verifyJWT(request: FastifyRequest, reply: FastifyReply) {
     try {
         const decoded = jwt.verify(token, JWT_SECRET) as jwt.JwtPayload;
         const userId = decoded.sub as string; // 'sub' (subject) claim is the User ID in Supabase
-        
+
         if (!userId) {
-            reply.code(401).send({ error: 'Token is valid but missing User ID (sub claim)' });
-            throw new Error('Unauthorized: Missing User ID');
+            throw unauthorizedError('Token is valid but missing User ID (sub claim)');
         }
 
         request.user = { id: userId };
 
     } catch (err) {
         console.error("JWT verification failed:", err);
-        reply.code(401).send({ error: 'Invalid or expired token' });
-        throw new Error('Unauthorized');
+        throw unauthorizedError('Invalid or expired token');
     }
 }

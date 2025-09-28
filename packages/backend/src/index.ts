@@ -17,12 +17,18 @@ export async function buildApp() {
     // 2. Auth Pre-Handler (保护 /sync 路由)
     fastify.addHook('preHandler', async (request: FastifyRequest, reply: FastifyReply) => {
         // 假设只有 /api/v1/sync/* 需要鉴权
-        if (request.url.startsWith('/api/v1/sync/')) { 
+        if (request.url.startsWith('/api/v1/sync/')) {
             try {
-                await verifyJWT(request, reply); 
+                await verifyJWT(request, reply);
             } catch (err) {
-                // verifyJWT 中已发送 401 响应
-                reply.sent = true; 
+                const statusCode = (err as { statusCode?: number })?.statusCode ?? 401;
+                const message = err instanceof Error ? err.message : 'Unauthorized';
+                reply.code(statusCode).send({
+                    statusCode,
+                    error: 'Unauthorized',
+                    message,
+                });
+                return;
             }
         }
     });
@@ -35,12 +41,14 @@ export async function buildApp() {
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
-buildApp().then(app => {
-    app.listen({ port: PORT, host: '0.0.0.0' }, (err, address) => {
-        if (err) {
-            console.error(err);
-            process.exit(1);
-        }
-        console.log(`Sync Service is listening on ${address}`);
+if (process.env.NODE_ENV !== 'test') {
+    buildApp().then(app => {
+        app.listen({ port: PORT, host: '0.0.0.0' }, (err, address) => {
+            if (err) {
+                console.error(err);
+                process.exit(1);
+            }
+            console.log(`Sync Service is listening on ${address}`);
+        });
     });
-});
+}
