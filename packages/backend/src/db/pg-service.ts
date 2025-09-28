@@ -1,8 +1,13 @@
 import { createRequire } from 'node:module';
+import { basename, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Pool, PoolClient } from 'pg';
 
 const require = createRequire(import.meta.url);
-const { getDatabaseUrl } = require('../../scripts/getDatabaseUrl.cjs') as {
+const moduleDir = dirname(fileURLToPath(import.meta.url));
+const parentDir = resolve(moduleDir, '..');
+const packageRoot = basename(parentDir) === 'src' ? resolve(parentDir, '..') : parentDir;
+const { getDatabaseUrl } = require(resolve(packageRoot, 'scripts/getDatabaseUrl.cjs')) as {
   getDatabaseUrl: () => string;
 };
 

@@ -5,7 +5,7 @@
   "scripts": {
     "start": "node dist/index.js",
     "dev": "bun --watch src/index.ts",
-    "build": "tsup src/index.ts --out-dir dist --format esm --platform node --target node18 --clean",
+    "build": "vite build --mode production",
     "migrate": "bunx node-pg-migrate up",
     "migrate:down": "bunx node-pg-migrate down",
     "seed": "bun run scripts/seed.ts"
@@ -18,8 +18,8 @@
     "node-pg-migrate": "^8.0.3",
     "pg-mem": "^3.0.5",
     "pino-pretty": "^11.2.2",
-    "tsup": "^8.0.1",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "vite": "^5.4.8"
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",

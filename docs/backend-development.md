@@ -25,7 +25,7 @@ run seed`.
 ## Production build
 
 - Create a production bundle with `bun run build`.
-- The script uses `tsup` to emit an ESM bundle to `dist/index.js`.
+- The script uses Vite/Rollup to emit an ESM bundle to `dist/index.js`.
 - Start the bundled server with `bun run start` (or `node dist/index.js`).
 - When `NODE_ENV=production`, logs are emitted as structured JSON. You can
   optionally set `LOG_LEVEL` to control verbosity.
