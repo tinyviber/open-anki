@@ -7,3 +7,5 @@ Anki project. For synchronization implementers, see the following resources:
 
 Additional package-specific documentation can be found within each package
 folder.
+
+- [Backend development workflow](docs/backend-development.md)
