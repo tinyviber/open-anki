@@ -38,6 +38,23 @@ interface SyncMetaRow {
     op: OperationType;
     timestamp: Date | string | number;
     payload?: unknown;
+    device_id?: string | null;
+    diff?: unknown;
+}
+
+interface ConflictDetail {
+    entityId: string;
+    entityType: EntityType;
+    incomingVersion: number;
+    currentVersion: number;
+    lastSyncedDeviceId: string | null;
+    retryHint: string;
+}
+
+class SyncConflictError extends Error {
+    constructor(public readonly conflicts: ConflictDetail[]) {
+        super('Sync conflict detected');
+    }
 }
 
 export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
@@ -57,9 +74,11 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
       },
       async (request, reply) => {
         const userId = request.user.id;
-        const { ops } = request.body;
+        const { deviceId, ops } = request.body;
 
         let latestVersion = 0;
+        const conflicts: ConflictDetail[] = [];
+        const versionCache = new Map<string, { version: number; deviceId: string | null }>();
 
         const client = await getQueryClient();
 
@@ -68,11 +87,47 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
 
             for (const op of ops) {
                 const version = op.version;
+                const cacheKey = `${op.entityType}:${op.entityId}`;
+
+                let versionInfo = versionCache.get(cacheKey);
+                if (!versionInfo) {
+                    const versionQuery = `
+                        SELECT version, device_id
+                        FROM sync_meta
+                        WHERE user_id = $1 AND entity_id = $2
+                        ORDER BY version DESC
+                        LIMIT 1
+                        FOR UPDATE;
+                    `;
+                    const result = await client.query(versionQuery, [userId, op.entityId]);
+                    const row = result.rows[0];
+                    versionInfo = {
+                        version: row ? Number(row.version) : 0,
+                        deviceId: row?.device_id ?? null,
+                    };
+                    versionCache.set(cacheKey, versionInfo);
+                }
+
+                if (versionInfo.version >= version) {
+                    const conflict: ConflictDetail = {
+                        entityId: op.entityId,
+                        entityType: op.entityType,
+                        incomingVersion: version,
+                        currentVersion: versionInfo.version,
+                        lastSyncedDeviceId: versionInfo.deviceId,
+                        retryHint:
+                            'Pull the latest changes from the server, merge them locally, and retry the push with incremented versions.',
+                    };
+                    conflicts.push(conflict);
+                    throw new SyncConflictError(conflicts);
+                }
+
+                versionCache.set(cacheKey, { version, deviceId });
 
                 // 1. Write to sync_meta (for conflict resolution/versioning)
                 const syncMetaInsert = `
-                    INSERT INTO sync_meta (user_id, entity_id, entity_type, version, op, timestamp, payload)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    INSERT INTO sync_meta (user_id, entity_id, entity_type, version, op, timestamp, payload, device_id, diff)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                     ON CONFLICT (user_id, entity_id, version) DO NOTHING;
                 `;
                 const timestampValue = Number.isFinite(op.timestamp) ? op.timestamp : Date.now();
@@ -86,6 +141,8 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                     op.op,
                     timestamp,
                     'payload' in op ? op.payload : null,
+                    deviceId,
+                    'diff' in op ? op.diff ?? null : null,
                 ]);
 
                 // 2. Handle entity operations based on type and operation
@@ -115,6 +172,14 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                 await client.query('ROLLBACK');
             } catch (rollbackError) {
                 fastify.log.error({ err: rollbackError }, 'Rollback failed');
+            }
+            if (error instanceof SyncConflictError) {
+                fastify.log.warn({ conflicts: error.conflicts }, 'Sync conflict detected');
+                return reply.code(409).send({
+                    error: 'Sync conflict detected: one or more operations are based on stale versions.',
+                    conflicts: error.conflicts,
+                    guidance: 'Call /pull to retrieve the latest state, merge locally, and retry the push with updated versions.',
+                });
             }
             fastify.log.error({ err: error }, 'Sync Push Transaction failed');
             return reply.code(500).send({ error: 'Synchronization failed due to a server error.' });

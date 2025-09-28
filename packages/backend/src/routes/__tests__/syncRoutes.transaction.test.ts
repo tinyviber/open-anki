@@ -13,6 +13,8 @@ type SyncMetaRow = {
   op: string;
   timestamp: Date;
   payload: any;
+  device_id: string;
+  diff: any;
 };
 
 type DeckRow = {
@@ -95,6 +97,8 @@ class RecordingClient {
         op: params[4],
         timestamp: params[5] instanceof Date ? params[5] : new Date(params[5]),
         payload: params[6] ?? null,
+        device_id: params[7],
+        diff: params[8] ?? null,
       };
 
       if (!targetStore.syncMeta.some(existing => existing.entity_id === row.entity_id && existing.version === row.version)) {
@@ -130,6 +134,19 @@ class RecordingClient {
     if (lower.startsWith('select * from sync_meta')) {
       const rows = (this.inTransaction ? this.workingStore.syncMeta : this.rootStore.syncMeta).map(cloneSyncMetaRow);
       return { rows, rowCount: rows.length };
+    }
+
+    if (lower.startsWith('select version, device_id from sync_meta')) {
+      const [userIdParam, entityIdParam] = params;
+      const searchStore = this.inTransaction ? this.workingStore : this.rootStore;
+      const matches = searchStore.syncMeta
+        .filter(row => row.user_id === userIdParam && row.entity_id === entityIdParam)
+        .sort((a, b) => b.version - a.version);
+      if (matches.length === 0) {
+        return { rows: [], rowCount: 0 };
+      }
+      const [{ version, device_id }] = matches;
+      return { rows: [{ version, device_id }], rowCount: 1 };
     }
 
     if (lower.startsWith('select * from decks')) {
