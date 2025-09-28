@@ -226,7 +226,9 @@ describe('syncRoutes timestamp handling', () => {
     const reviewTimestamp: Date = reviewRows.rows[0].timestamp;
     expect(reviewTimestamp.getTime()).toBe(reviewTimestampMillis);
 
-    const pullResponse = await fetch(`${baseUrl}/pull?sinceVersion=0`);
+    const pullResponse = await fetch(
+      `${baseUrl}/pull?sinceVersion=0&limit=50&deviceId=test-device`
+    );
     expect(pullResponse.status).toBe(200);
     const body = await pullResponse.json();
     expect(body.ops).toHaveLength(4);
