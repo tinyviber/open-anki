@@ -76,6 +76,25 @@ const toNumberOrNull = (value: unknown): number | null => {
     return Number.isFinite(numericValue) ? numericValue : null;
 };
 
+const ensureFiniteMillis = (value: number, fieldName: string): number => {
+    if (!Number.isFinite(value)) {
+        throw new Error(`Expected ${fieldName} to be a finite millisecond timestamp but received ${value}`);
+    }
+    return value;
+};
+
+const toDateFromMillis = (value: number, fieldName: string): Date => {
+    return new Date(ensureFiniteMillis(value, fieldName));
+};
+
+const toRequiredNumber = (value: unknown, fieldName: string): number => {
+    const numericValue = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(numericValue)) {
+        throw new Error(`Expected ${fieldName} to be a finite number but received ${value}`);
+    }
+    return numericValue;
+};
+
 export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
     fastify.setValidatorCompiler(validatorCompiler);
     fastify.setSerializerCompiler(serializerCompiler);
@@ -149,8 +168,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                     ON CONFLICT (user_id, entity_id, version) DO NOTHING;
                 `;
-                const timestampValue = Number.isFinite(op.timestamp) ? op.timestamp : Date.now();
-                const timestamp = new Date(timestampValue);
+                const timestamp = toDateFromMillis(op.timestamp, 'sync_meta.timestamp');
 
                 await client.query(syncMetaInsert, [
                     userId,
@@ -457,7 +475,7 @@ async function handleCardOperation(client: QueryClient, userId: string, op: Card
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             ON CONFLICT (id) DO NOTHING;
         `;
-        const due = new Date(payload.due);
+        const due = toDateFromMillis(payload.due, 'card.due');
         const originalDue = payload.original_due ?? null;
         await client.query(insertQuery, [
             op.entityId,
@@ -481,7 +499,7 @@ async function handleCardOperation(client: QueryClient, userId: string, op: Card
                 reps = $6, lapses = $7, card_type = $8, queue = $9, original_due = $10, updated_at = NOW()
             WHERE id = $11 AND user_id = $12;
         `;
-        const due = new Date(payload.due);
+        const due = toDateFromMillis(payload.due, 'card.due');
         const originalDue = payload.original_due ?? null;
         await client.query(updateQuery, [
             payload.note_id,
@@ -514,7 +532,7 @@ async function handleReviewLogOperation(client: QueryClient, userId: string, op:
             VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT (id) DO NOTHING;
         `;
-        const timestamp = payload.timestamp != null ? new Date(payload.timestamp) : new Date();
+        const timestamp = toDateFromMillis(payload.timestamp, 'review_log.timestamp');
         await client.query(insertQuery, [
             op.entityId,
             userId,
@@ -522,6 +540,22 @@ async function handleReviewLogOperation(client: QueryClient, userId: string, op:
             timestamp,
             payload.rating,
             payload.duration_ms ?? null,
+        ]);
+    } else if (op.op === 'update') {
+        const payload = op.payload;
+        const updateQuery = `
+            UPDATE review_logs
+            SET card_id = $1, timestamp = $2, rating = $3, duration_ms = $4
+            WHERE id = $5 AND user_id = $6;
+        `;
+        const timestamp = toDateFromMillis(payload.timestamp, 'review_log.timestamp');
+        await client.query(updateQuery, [
+            payload.card_id,
+            timestamp,
+            payload.rating,
+            payload.duration_ms ?? null,
+            op.entityId,
+            userId,
         ]);
     } else if (op.op === 'delete') {
         const deleteQuery = `
@@ -575,15 +609,15 @@ async function fetchEntityData(userId: string, entityId: string, entityType: Ent
         if (!row) return null;
         return cardPayloadSchema.parse({
             note_id: row.note_id,
-            ordinal: row.ordinal,
+            ordinal: toRequiredNumber(row.ordinal, 'card.ordinal'),
             due: row.due ? toMillis(row.due) : Date.now(),
-            interval: Number(row.interval ?? 0),
-            ease_factor: Number(row.ease_factor ?? 0),
-            reps: Number(row.reps ?? 0),
-            lapses: Number(row.lapses ?? 0),
-            card_type: Number(row.card_type ?? 0),
-            queue: Number(row.queue ?? 0),
-            original_due: row.original_due ?? null,
+            interval: toRequiredNumber(row.interval, 'card.interval'),
+            ease_factor: toRequiredNumber(row.ease_factor, 'card.ease_factor'),
+            reps: toRequiredNumber(row.reps, 'card.reps'),
+            lapses: toRequiredNumber(row.lapses, 'card.lapses'),
+            card_type: toRequiredNumber(row.card_type, 'card.card_type'),
+            queue: toRequiredNumber(row.queue, 'card.queue'),
+            original_due: row.original_due != null ? Number(row.original_due) : null,
         });
     }
     const result = await query(
@@ -595,8 +629,8 @@ async function fetchEntityData(userId: string, entityId: string, entityType: Ent
     return reviewLogPayloadSchema.parse({
         card_id: row.card_id,
         timestamp: row.timestamp ? toMillis(row.timestamp) : Date.now(),
-        rating: row.rating,
-        duration_ms: row.duration_ms ?? null,
+        rating: toRequiredNumber(row.rating, 'review_log.rating'),
+        duration_ms: row.duration_ms != null ? Number(row.duration_ms) : null,
     });
 }
 
