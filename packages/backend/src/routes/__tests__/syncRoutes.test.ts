@@ -27,7 +27,6 @@ describe('syncRoutes timestamp handling', () => {
         op TEXT NOT NULL,
         timestamp TIMESTAMPTZ NOT NULL,
         payload JSONB,
-        UNIQUE(entity_id, version),
         UNIQUE(user_id, entity_id, version)
       );
     `);
