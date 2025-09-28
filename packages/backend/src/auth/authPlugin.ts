@@ -11,7 +11,8 @@ declare module 'fastify' {
 }
 
 // 确保在环境变量中设置了 SUPABASE_JWT_SECRET
-const JWT_SECRET = process.env.SUPABASE_JWT_SECRET || 'your_super_secret_jwt_key_from_supabase_config'; 
+const resolveJwtSecret = () =>
+    process.env.SUPABASE_JWT_SECRET || 'your_super_secret_jwt_key_from_supabase_config';
 
 
 /**
@@ -32,8 +33,10 @@ export async function verifyJWT(request: FastifyRequest, _reply: FastifyReply) {
 
     const token = authHeader.split(' ')[1];
 
+    const secret = resolveJwtSecret();
+
     try {
-        const decoded = jwt.verify(token, JWT_SECRET) as jwt.JwtPayload;
+        const decoded = jwt.verify(token, secret) as jwt.JwtPayload;
         const userId = decoded.sub as string; // 'sub' (subject) claim is the User ID in Supabase
 
         if (!userId) {
