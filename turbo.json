@@ -37,12 +37,10 @@
       "outputs": []
     },
     "seed": {
-      "dependsOn": ["migrate"],
       "cache": false,
       "outputs": []
     },
     "test:setup": {
-      "dependsOn": ["seed"],
       "cache": false,
       "outputs": []
     },
