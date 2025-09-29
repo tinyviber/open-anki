@@ -158,6 +158,18 @@ function generateDeviceId(): string {
   return `device-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
 }
 
+export function clearStoredDeviceId(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.localStorage.removeItem(DEVICE_ID_STORAGE_KEY);
+  } catch (error) {
+    console.warn('Unable to clear stored device ID during sign-out', error);
+  }
+}
+
 async function fetchSession(auth: SyncAuthContext): Promise<SessionResponse> {
   const response = await fetchWithAuth(
     `${SYNC_BASE_URL}/session`,
