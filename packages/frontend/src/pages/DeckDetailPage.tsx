@@ -1,11 +1,23 @@
+import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, BookOpenCheck, ListChecks, Plus, RefreshCcw } from 'lucide-react';
+import { ArrowLeft, BookOpenCheck, ListChecks, Plus, RefreshCcw, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { useDeckDetail, type DeckDetailData } from '@/hooks/useDeckDetail';
 import { NewNoteDialog } from '@/components/NewNoteDialog';
+import { deleteDeck } from '@/core/db/deckActions';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogClose,
+} from '@/components/ui/dialog';
 
 const difficultyStyles: Record<string, string> = {
   easy: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-200 border-emerald-200 dark:border-emerald-800',
@@ -98,6 +110,9 @@ export function DeckDetailPage() {
   const { deckId } = useParams();
   const navigate = useNavigate();
   const detail = useDeckDetail(deckId);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   if (deckId === undefined) {
     return (
@@ -158,6 +173,26 @@ export function DeckDetailPage() {
   const difficultyClass = difficultyStyles[difficultyKey] ?? difficultyStyles.medium;
   const difficultyLabel = difficultyLabels[difficultyKey] ?? difficultyLabels.medium;
 
+  const handleDeleteDeck = async () => {
+    if (isDeleting) {
+      return;
+    }
+
+    setIsDeleting(true);
+    setDeleteError(null);
+
+    try {
+      await deleteDeck(deck.id);
+      setDeleteDialogOpen(false);
+      navigate('/decks');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '删除卡片组时出现未知错误。';
+      setDeleteError(message);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   return (
     <div className="space-y-8">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -191,6 +226,49 @@ export function DeckDetailPage() {
               <Plus className="mr-2 h-4 w-4" /> 添加卡片
             </Button>
           </NewNoteDialog>
+          <Dialog
+            open={deleteDialogOpen}
+            onOpenChange={open => {
+              if (isDeleting) {
+                return;
+              }
+              setDeleteError(null);
+              setDeleteDialogOpen(open);
+            }}
+          >
+            <DialogTrigger asChild>
+              <Button variant="destructive" className="w-full sm:w-auto">
+                <Trash2 className="mr-2 h-4 w-4" /> 删除卡组
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>删除卡片组</DialogTitle>
+                <DialogDescription>
+                  此操作将永久移除「{deck.name}」及其包含的所有卡片、笔记和学习记录，且无法撤销。请确认是否继续。
+                </DialogDescription>
+              </DialogHeader>
+              {deleteError && (
+                <p className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                  {deleteError}
+                </p>
+              )}
+              <DialogFooter>
+                <DialogClose asChild>
+                  <Button variant="outline" disabled={isDeleting}>
+                    取消
+                  </Button>
+                </DialogClose>
+                <Button
+                  variant="destructive"
+                  onClick={handleDeleteDeck}
+                  disabled={isDeleting}
+                >
+                  {isDeleting ? '正在删除...' : '确认删除'}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </div>
       </div>
 
