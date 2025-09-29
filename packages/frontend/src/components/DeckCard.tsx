@@ -15,14 +15,14 @@ export interface DeckCardProps {
   difficulty: "easy" | "medium" | "hard";
 }
 
-export function DeckCard({ 
-  title, 
-  description, 
-  totalCards, 
-  dueCards, 
-  progress, 
+export function DeckCard({
+  title,
+  description,
+  totalCards,
+  dueCards,
+  progress,
   lastStudied,
-  difficulty 
+  difficulty
 }: DeckCardProps) {
   const difficultyColors = {
     easy: "bg-green-100 text-green-800 dark:bg-green-700 dark:text-green-200 border-green-200 dark:border-green-800",
@@ -37,7 +37,7 @@ export function DeckCard({
   };
 
   return (
-    <Card className="cursor-pointer transition-all hover:shadow-lg hover:border-primary">
+    <Card className="flex h-full cursor-pointer flex-col transition-all hover:border-primary hover:shadow-lg">
       <CardHeader className="pb-2">
         <div className="flex items-start justify-between">
           <div className="space-y-1">
@@ -49,7 +49,7 @@ export function DeckCard({
           </Badge>
         </div>
       </CardHeader>
-      <CardContent className="pt-2 space-y-4">
+      <CardContent className="flex flex-1 flex-col gap-4 pt-2">
         <div className="flex items-center justify-between text-sm">
           <div className="flex items-center space-x-1 text-muted-foreground">
             <BookOpen className="h-4 w-4" />
@@ -60,7 +60,7 @@ export function DeckCard({
             <span className="font-semibold">{dueCards} 待复习</span>
           </div>
         </div>
-        
+
         <div className="space-y-2">
           <div className="flex justify-between text-sm">
             <span>学习进度</span>
@@ -69,12 +69,14 @@ export function DeckCard({
           <Progress value={progress} className="h-2" />
         </div>
 
-        {lastStudied && (
-          <div className="flex items-center text-xs text-muted-foreground pt-1">
-            <Clock className="mr-1 h-3 w-3" />
-            上次学习: {lastStudied}
-          </div>
-        )}
+        <div className="flex min-h-[1.5rem] items-center pt-1 text-xs text-muted-foreground">
+          <Clock className="mr-1 h-3 w-3 opacity-70" />
+          {lastStudied ? (
+            <span>上次学习: {lastStudied}</span>
+          ) : (
+            <span>尚未开始学习</span>
+          )}
+        </div>
       </CardContent>
     </Card>
   );

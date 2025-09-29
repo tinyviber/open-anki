@@ -51,7 +51,7 @@ export async function createDeck({ name, description, difficulty }: { name: stri
   }
 
   // 写入事务
-  await db.transaction('rw', db.decks, db.syncMeta, async (tx) => {
+  await db.transaction('rw', db.decks, db.syncMeta, async () => {
     // 1. Add the Deck
     await db.decks.add(newDeck);
 
@@ -67,4 +67,55 @@ export async function createDeck({ name, description, difficulty }: { name: stri
   });
 
   return newDeck.id;
+}
+
+export async function deleteDeck(deckId: string): Promise<void> {
+  if (!deckId) {
+    throw new Error("Deck ID is required to delete a deck.");
+  }
+
+  await db.transaction('rw', db.decks, db.cards, db.notes, db.reviewLogs, db.syncMeta, async () => {
+    const deck = await db.decks.get(deckId);
+    if (!deck) {
+      return;
+    }
+
+    const cardsInDeck = await db.cards.where('deckId').equals(deckId).toArray();
+    const cardIds = cardsInDeck.map(card => card.id);
+    const noteIds = Array.from(new Set(cardsInDeck.map(card => card.noteId)));
+
+    if (cardIds.length > 0) {
+      await db.cards.bulkDelete(cardIds);
+      await db.reviewLogs.where('cardId').anyOf(cardIds).delete();
+    }
+
+    if (noteIds.length > 0) {
+      const notesToDelete: string[] = [];
+      for (const noteId of noteIds) {
+        const existsInOtherDeck = await db.cards
+          .where('noteId')
+          .equals(noteId)
+          .and(card => card.deckId !== deckId)
+          .first();
+
+        if (!existsInOtherDeck) {
+          notesToDelete.push(noteId);
+        }
+      }
+
+      if (notesToDelete.length > 0) {
+        await db.notes.bulkDelete(notesToDelete);
+      }
+    }
+
+    await db.decks.delete(deckId);
+
+    const timestamp = Date.now();
+    await db.syncMeta.add({
+      entityId: deckId,
+      entityType: 'deck',
+      op: 'delete',
+      timestamp,
+    });
+  });
 }
