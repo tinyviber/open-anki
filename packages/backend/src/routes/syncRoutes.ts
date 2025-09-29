@@ -462,11 +462,61 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                 'Processing sync pull request'
             );
 
-            const applyContinuation =
-                decodedContinuation !== null && decodedContinuation.version >= effectiveSinceVersion;
+            let continuationForQuery: { version: number; id: string | number } | null = null;
+
+            if (decodedContinuation && decodedContinuation.version >= effectiveSinceVersion) {
+                const { version, id } = decodedContinuation;
+                if (syncMetaIdType === 'uuid') {
+                    if (UUID_REGEX.test(id)) {
+                        continuationForQuery = { version, id };
+                    } else {
+                        fastify.log.warn(
+                            {
+                                userId,
+                                requestedSinceVersion,
+                                continuationToken: continuationTokenToUse,
+                                decodedContinuation,
+                                syncMetaIdType,
+                            },
+                            'Continuation token id did not match UUID sync_meta.id schema; ignoring token.'
+                        );
+                    }
+                } else if (syncMetaIdType === 'bigint') {
+                    if (INTEGER_REGEX.test(id)) {
+                        try {
+                            const parsed = BigInt(id);
+                            continuationForQuery = { version, id: parsed.toString() };
+                        } catch (error) {
+                            fastify.log.warn(
+                                { userId, continuationToken: continuationTokenToUse, decodedContinuation, err: error },
+                                'Failed to parse bigint continuation token id; ignoring token.'
+                            );
+                        }
+                    } else {
+                        fastify.log.warn(
+                            {
+                                userId,
+                                requestedSinceVersion,
+                                continuationToken: continuationTokenToUse,
+                                decodedContinuation,
+                                syncMetaIdType,
+                            },
+                            'Continuation token id did not match numeric sync_meta.id schema; ignoring token.'
+                        );
+                    }
+                } else if (syncMetaIdType === 'text') {
+                    continuationForQuery = { version, id };
+                }
+
+                if (!continuationForQuery) {
+                    continuationTokenToUse = null;
+                }
+            }
+
+            const applyContinuation = continuationForQuery !== null;
 
             const comparisonVersion = applyContinuation
-                ? Math.max(effectiveSinceVersion, decodedContinuation!.version)
+                ? Math.max(effectiveSinceVersion, continuationForQuery!.version)
                 : effectiveSinceVersion;
 
             const params: unknown[] = [userId, comparisonVersion];
@@ -479,8 +529,8 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
             `;
 
             if (applyContinuation) {
-                const idCast =
-                    syncMetaIdType === 'uuid' ? '::uuid' : syncMetaIdType === 'bigint' ? '::bigint' : '';
+                const idCast = syncMetaIdType === 'uuid' ? '::uuid' : syncMetaIdType === 'bigint' ? '::bigint' : '';
+
                 sql = `
                     SELECT id, entity_id, entity_type, version, op, timestamp, payload
                     FROM sync_meta
@@ -488,7 +538,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                     ORDER BY version ASC, id ASC
                     LIMIT $5;
                 `;
-                params.push(decodedContinuation!.version, decodedContinuation!.id, fetchLimit);
+                params.push(continuationForQuery!.version, continuationForQuery!.id, fetchLimit);
             } else {
                 params.push(fetchLimit);
             }
@@ -503,7 +553,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
 
             const baselineVersion = Math.max(
                 effectiveSinceVersion,
-                decodedContinuation?.version ?? effectiveSinceVersion
+                continuationForQuery?.version ?? effectiveSinceVersion
             );
             const highestVersion = ops.length > 0 ? ops[ops.length - 1].version : baselineVersion;
 
@@ -517,8 +567,8 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
 
             let lastMetaIdValue = metaRows.length > 0 ? toStringOrNull(metaRows[metaRows.length - 1].id) : null;
             if (lastMetaIdValue === null) {
-                if (applyContinuation && decodedContinuation) {
-                    lastMetaIdValue = decodedContinuation.id;
+                if (applyContinuation && continuationForQuery) {
+                    lastMetaIdValue = String(continuationForQuery.id);
                 } else {
                     lastMetaIdValue = storedLastMetaId ?? null;
                 }
