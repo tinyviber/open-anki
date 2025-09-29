@@ -51,7 +51,7 @@ interface SyncMetaRow {
 
 interface DeviceProgressRow {
     last_version: number | string;
-    last_meta_id: number | string | null;
+    last_meta_id: string | number | null;
     continuation_token: string | null;
 }
 
@@ -80,6 +80,19 @@ const toNumberOrNull = (value: unknown): number | null => {
     }
     const numericValue = typeof value === 'number' ? value : Number(value);
     return Number.isFinite(numericValue) ? numericValue : null;
+};
+
+const toStringOrNull = (value: unknown): string | null => {
+    if (value === null || value === undefined) {
+        return null;
+    }
+    if (typeof value === 'string') {
+        return value;
+    }
+    if (typeof value === 'number' || typeof value === 'bigint') {
+        return String(value);
+    }
+    return null;
 };
 
 const ensureFiniteMillis = (value: number, fieldName: string): number => {
@@ -301,7 +314,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
 
             const existingProgress = progressResult.rows[0] as DeviceProgressRow | undefined;
             const storedVersion = toNumberOrNull(existingProgress?.last_version) ?? 0;
-            const storedLastMetaId = toNumberOrNull(existingProgress?.last_meta_id);
+            const storedLastMetaId = toStringOrNull(existingProgress?.last_meta_id);
 
             const hasRequestedSince =
                 typeof requestedSinceVersion === 'number' && Number.isFinite(requestedSinceVersion);
@@ -312,7 +325,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                 continuationTokenToUse = existingProgress.continuation_token;
             }
 
-            let decodedContinuation: { version: number; id: number } | null = null;
+            let decodedContinuation: { version: number; id: string } | null = null;
             if (continuationTokenToUse) {
                 try {
                     decodedContinuation = decodeContinuationToken(continuationTokenToUse);
@@ -384,11 +397,11 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                 hasMore && metaRows.length > 0
                     ? encodeContinuationToken(
                           Number(metaRows[metaRows.length - 1].version),
-                          Number(metaRows[metaRows.length - 1].id)
+                          String(metaRows[metaRows.length - 1].id)
                       )
                     : null;
 
-            let lastMetaIdValue = metaRows.length > 0 ? toNumberOrNull(metaRows[metaRows.length - 1].id) : null;
+            let lastMetaIdValue = metaRows.length > 0 ? toStringOrNull(metaRows[metaRows.length - 1].id) : null;
             if (lastMetaIdValue === null) {
                 if (applyContinuation && decodedContinuation) {
                     lastMetaIdValue = decodedContinuation.id;

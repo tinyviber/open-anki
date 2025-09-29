@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS device_sync_progress (
     user_id UUID NOT NULL,
     device_id TEXT NOT NULL,
     last_version BIGINT NOT NULL DEFAULT 0,
-    last_meta_id BIGINT,
+    last_meta_id TEXT,
     continuation_token TEXT,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     PRIMARY KEY (user_id, device_id)
