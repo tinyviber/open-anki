@@ -173,6 +173,7 @@ async function fetchSession(auth: SyncAuthContext): Promise<SessionResponse> {
   return body;
 }
 
+
 async function pushPendingDeckOps(
   state: SyncState,
   auth: SyncAuthContext,
@@ -202,6 +203,7 @@ async function pushPendingDeckOps(
   if (ops.length === 0) {
     return 0;
   }
+
 
   const response = await fetchWithAuth(
     `${SYNC_BASE_URL}/push`,
