@@ -11,6 +11,7 @@ set -euo pipefail
 # If Supabase refuses to start because it thinks another "supabase start" is already running,
 # run "supabase stop --force" first and then re-run this helper.
 
+
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
 ENV_FILE="${REPO_ROOT}/supabase/.env"
@@ -59,3 +60,4 @@ supabase status -o env \
 echo "Supabase environment exported to ${ENV_FILE}"
 
 "${SCRIPT_DIR}/sync-frontend-env.sh"
+
