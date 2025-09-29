@@ -36,9 +36,38 @@ export async function buildApp() {
         throw err;
     }
 
+    const normalizeOrigin = (origin: string) => origin.replace(/\/$/, '');
+    const configuredOrigins = process.env.CORS_ALLOWED_ORIGINS
+        ? process.env.CORS_ALLOWED_ORIGINS.split(',')
+              .map(origin => origin.trim())
+              .filter(Boolean)
+              .map(normalizeOrigin)
+        : [];
+    const allowedOrigins =
+        configuredOrigins.length > 0
+            ? configuredOrigins
+            : !isProduction
+            ? ['http://localhost:5173'].map(normalizeOrigin)
+            : [];
+
     // 1. CORS 配置
     await fastify.register(cors, {
-        origin: '*', // 生产环境需限制为前端域名
+        origin(origin, callback) {
+            if (!origin) {
+                callback(null, true);
+                return;
+            }
+
+            const normalizedOrigin = normalizeOrigin(origin);
+
+            if (allowedOrigins.length === 0 || allowedOrigins.includes(normalizedOrigin)) {
+                callback(null, true);
+                return;
+            }
+
+            callback(new Error(`Origin ${origin} is not allowed by CORS`), false);
+        },
+        credentials: true,
         methods: ['GET', 'POST', 'PUT', 'DELETE'],
     });
 
