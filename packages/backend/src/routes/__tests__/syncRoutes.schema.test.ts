@@ -61,7 +61,7 @@ describe('syncRoutes with core schema DDL', () => {
     const db = newDb({ autoCreateForeignKeyIndices: true });
     db.public.registerFunction({
       name: 'gen_random_uuid',
-      returns: 'uuid',
+      returns: 'uuid' as any,
       implementation: () => randomUUID(),
     });
     const adapter = db.adapters.createPg();

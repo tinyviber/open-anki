@@ -101,52 +101,163 @@ const INTEGER_REGEX = /^[0-9]+$/;
 
 type SyncMetaIdType = 'uuid' | 'bigint' | 'text';
 
-const resolveSyncMetaIdType = async (client: QueryClient): Promise<SyncMetaIdType> => {
+const normalizeDataType = (value?: string | null): string | null => {
+    if (!value) {
+        return null;
+    }
+    const trimmed = value.trim().toLowerCase();
+    if (trimmed.length === 0) {
+        return null;
+    }
+    const withoutSchema = trimmed.includes('.') ? trimmed.split('.').pop() ?? trimmed : trimmed;
+    return withoutSchema;
+};
+
+const resolveFromSampleValue = (value: unknown): SyncMetaIdType | null => {
+    if (typeof value === 'number' || typeof value === 'bigint') {
+        return 'bigint';
+    }
+    if (typeof value === 'string') {
+        if (UUID_REGEX.test(value)) {
+            return 'uuid';
+        }
+        if (INTEGER_REGEX.test(value)) {
+            return 'bigint';
+        }
+        return 'text';
+    }
+    return null;
+};
+
+const resolveTypeFromDataType = (raw?: string | null): SyncMetaIdType | null => {
+    const normalized = normalizeDataType(raw);
+    if (!normalized) {
+        return null;
+    }
+    if (normalized === 'uuid') {
+        return 'uuid';
+    }
+    if (normalized === 'bigint' || normalized === 'int8' || normalized === 'integer' || normalized === 'int4') {
+        return 'bigint';
+    }
+    if (normalized === 'text' || normalized === 'character varying' || normalized === 'varchar') {
+        return 'text';
+    }
+    return null;
+};
+
+const resolveSyncMetaIdType = async (client: QueryClient, userId: string): Promise<SyncMetaIdType> => {
+    const mapDataType = (raw?: string | null): SyncMetaIdType | null => {
+        return resolveTypeFromDataType(raw);
+    };
+
+    const introspectionQueries: Array<{ sql: string; params?: unknown[] }> = [
+        {
+            sql: `
+                SELECT atttypid::regtype::text AS data_type
+                FROM pg_attribute
+                WHERE attrelid = 'sync_meta'::regclass AND attname = 'id' AND attisdropped = false
+                LIMIT 1;
+            `,
+        },
+        {
+            sql: `
+                SELECT data_type AS data_type
+                FROM information_schema.columns
+                WHERE table_name = 'sync_meta' AND column_name = 'id'
+                ORDER BY ordinal_position
+                LIMIT 1;
+            `,
+        },
+        {
+            sql: `
+                SELECT pg_typeof(id)::text AS data_type
+                FROM sync_meta
+                WHERE user_id = $1
+                ORDER BY version DESC
+                LIMIT 1;
+            `,
+            params: [userId],
+        },
+    ];
+
+    let candidateType: SyncMetaIdType | null = null;
+
+    for (const { sql, params } of introspectionQueries) {
+        try {
+            const result = await client.query(sql, params ?? []);
+            const row = result.rows[0] as { data_type?: string } | undefined;
+            const resolved = mapDataType(row?.data_type ?? null);
+            if (resolved) {
+                if (resolved === 'bigint') {
+                    candidateType = 'bigint';
+                    continue;
+                }
+                return resolved;
+            }
+        } catch {
+            continue;
+        }
+    }
+
+    try {
+        const sampleResult = await client.query(
+            `
+                SELECT id
+                FROM sync_meta
+                WHERE user_id = $1
+                ORDER BY version DESC
+                LIMIT 1;
+            `,
+            [userId]
+        );
+        const sampleRow = sampleResult.rows[0] as { id?: unknown } | undefined;
+        const derived = resolveFromSampleValue(sampleRow?.id ?? null);
+        if (derived) {
+            return derived;
+        }
+    } catch {
+        // Ignore sample resolution failures and fall through to error below.
+    }
+
+    if (candidateType) {
+        return candidateType;
+    }
+
+    throw new Error('Unable to resolve sync_meta.id data type via introspection or sample rows.');
+};
+
+const resolveProgressMetaIdType = async (client: QueryClient): Promise<SyncMetaIdType | null> => {
     const queries = [
         `
             SELECT atttypid::regtype::text AS data_type
             FROM pg_attribute
-            WHERE attrelid = 'sync_meta'::regclass AND attname = 'id'
+            WHERE attrelid = 'device_sync_progress'::regclass AND attname = 'last_meta_id' AND attisdropped = false
             LIMIT 1;
         `,
         `
             SELECT data_type AS data_type
             FROM information_schema.columns
-            WHERE table_name = 'sync_meta' AND column_name = 'id'
+            WHERE table_name = 'device_sync_progress' AND column_name = 'last_meta_id'
             ORDER BY ordinal_position
             LIMIT 1;
         `,
     ];
 
-    let dataType: string | undefined;
-
-    for (const query of queries) {
+    for (const sql of queries) {
         try {
-            const result = await client.query(query);
+            const result = await client.query(sql);
             const row = result.rows[0] as { data_type?: string } | undefined;
-            if (row?.data_type) {
-                dataType = row.data_type;
-                break;
+            const resolved = resolveTypeFromDataType(row?.data_type ?? null);
+            if (resolved) {
+                return resolved;
             }
         } catch {
-            // Try the next introspection strategy if the current one fails (e.g., pg-mem limitations)
             continue;
         }
     }
 
-    if (dataType === 'uuid') {
-        return 'uuid';
-    }
-
-    if (dataType === 'bigint' || dataType === 'int8' || dataType === 'integer' || dataType === 'int4') {
-        return 'bigint';
-    }
-
-    if (dataType === 'text' || dataType === 'character varying' || dataType === 'varchar') {
-        return 'text';
-    }
-
-    throw new Error(`Unsupported sync_meta.id data type: ${dataType ?? 'unknown'}`);
+    return null;
 };
 
 const ensureFiniteMillis = (value: number, fieldName: string): number => {
@@ -231,7 +342,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                     statusCode: 500,
                     error: 'Internal Server Error',
                     message: 'Failed to establish sync session.',
-                });
+                } as never);
             } finally {
                 client.release();
             }
@@ -355,10 +466,10 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                     error: 'Sync conflict detected: one or more operations are based on stale versions.',
                     conflicts: error.conflicts,
                     guidance: 'Call /pull to retrieve the latest state, merge locally, and retry the push with updated versions.',
-                });
+                } as never);
             }
             fastify.log.error({ err: error }, 'Sync Push Transaction failed');
-            return reply.code(500).send({ error: 'Synchronization failed due to a server error.' });
+            return reply.code(500).send({ error: 'Synchronization failed due to a server error.' } as never);
         } finally {
             client.release();
         }
@@ -392,7 +503,8 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
             await client.query('BEGIN');
             await setRlsContext(client, userId);
 
-            const syncMetaIdType = await resolveSyncMetaIdType(client);
+            const syncMetaIdType = await resolveSyncMetaIdType(client, userId);
+            const progressMetaIdType = await resolveProgressMetaIdType(client);
 
             const progressResult = await client.query(
                 `
@@ -427,7 +539,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                         'Invalid continuation token provided to /pull'
                     );
                     await client.query('ROLLBACK');
-                    return reply.code(400).send({ error: 'Invalid continuation token supplied.' });
+                    return reply.code(400).send({ error: 'Invalid continuation token supplied.' } as never);
                 }
                 const isIdValidForSchema =
                     (syncMetaIdType === 'uuid' && UUID_REGEX.test(decodedContinuation.id)) ||
@@ -449,18 +561,6 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                     continuationTokenToUse = null;
                 }
             }
-
-            fastify.log.debug(
-                {
-                    userId,
-                    requestedSinceVersion,
-                    sinceVersion: effectiveSinceVersion,
-                    limit: effectiveLimit,
-                    deviceId: effectiveDeviceId,
-                    continuationToken: continuationTokenToUse,
-                },
-                'Processing sync pull request'
-            );
 
             let continuationForQuery: { version: number; id: string | number } | null = null;
 
@@ -529,12 +629,17 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
             `;
 
             if (applyContinuation) {
-                const idCast = syncMetaIdType === 'uuid' ? '::uuid' : syncMetaIdType === 'bigint' ? '::bigint' : '';
+                const idComparison =
+                    syncMetaIdType === 'uuid'
+                        ? 'id > $4::uuid'
+                        : syncMetaIdType === 'bigint'
+                        ? 'id > $4::bigint'
+                        : 'id > $4::text';
 
                 sql = `
                     SELECT id, entity_id, entity_type, version, op, timestamp, payload
                     FROM sync_meta
-                    WHERE user_id = $1 AND (version > $2 OR (version = $3 AND id > $4${idCast}))
+                    WHERE user_id = $1 AND (version > $2 OR (version = $3 AND ${idComparison}))
                     ORDER BY version ASC, id ASC
                     LIMIT $5;
                 `;
@@ -574,6 +679,23 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                 }
             }
 
+            let lastMetaIdColumnValue: string | number | null = lastMetaIdValue;
+            if (lastMetaIdColumnValue !== null && progressMetaIdType === 'bigint') {
+                if (!INTEGER_REGEX.test(lastMetaIdColumnValue)) {
+                    fastify.log.warn(
+                        {
+                            userId,
+                            deviceId: effectiveDeviceId,
+                            lastMetaIdValue,
+                            progressMetaIdType,
+                            syncMetaIdType,
+                        },
+                        'Dropping non-numeric last_meta_id value to avoid type mismatch'
+                    );
+                    lastMetaIdColumnValue = null;
+                }
+            }
+
             await client.query(
                 `
                     INSERT INTO device_sync_progress (user_id, device_id, last_version, last_meta_id, continuation_token, updated_at)
@@ -585,7 +707,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                         continuation_token = EXCLUDED.continuation_token,
                         updated_at = NOW();
                 `,
-                [userId, effectiveDeviceId, highestVersion, lastMetaIdValue, nextToken]
+                [userId, effectiveDeviceId, highestVersion, lastMetaIdColumnValue, nextToken]
             );
 
             await client.query('COMMIT');
@@ -612,7 +734,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                     'Failed to rollback transaction for sync pull'
                 );
             }
-            return reply.code(500).send({ error: 'Error pulling changes.' });
+            return reply.code(500).send({ error: 'Error pulling changes.' } as never);
         } finally {
             client.release();
         }
@@ -894,6 +1016,11 @@ async function fetchEntityData(
         duration_ms: row.duration_ms != null ? Number(row.duration_ms) : null,
     });
 }
+
+export const __internal = {
+    resolveSyncMetaIdType,
+    resolveProgressMetaIdType,
+};
 
 async function mapMetaRowToOp(client: QueryClient, row: SyncMetaRow, userId: string): Promise<SyncOp> {
     const version = Number(row.version);

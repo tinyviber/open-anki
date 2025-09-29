@@ -23,7 +23,7 @@ const getPool = () => {
   return activePool;
 };
 
-export const query = (text: string, params: readonly unknown[] = []) => {
+export const query = (text: string, params?: unknown[]) => {
   return getPool().query(text, params);
 };
 

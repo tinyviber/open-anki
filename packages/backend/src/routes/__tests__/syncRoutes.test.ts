@@ -222,7 +222,7 @@ describe('syncRoutes timestamp handling', () => {
       'SELECT entity_type, version, timestamp, device_id, diff FROM sync_meta ORDER BY version ASC'
     );
     expect(metaRows.rows).toHaveLength(4);
-    metaRows.rows.forEach((row, index) => {
+    metaRows.rows.forEach((row: Record<string, unknown>, index: number) => {
       expect(row.timestamp).toBeInstanceOf(Date);
       expect((row.timestamp as Date).getTime()).toBe(timestampMillis + index);
       expect(row.device_id).toBe('device-1');
