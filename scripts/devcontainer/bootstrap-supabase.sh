@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # This helper is invoked by the devcontainer post-start hook to ensure the local Supabase stack
-# is running and that the generated credentials in supabase/.env stay in sync.
+# is running, keeps the generated credentials in supabase/.env in sync, and refreshes the
+# frontend/.env file with the values the web app expects.
 #
 # If the CLI state becomes stale (for example after manually stopping containers) you can rerun
 # this script manually from the repository root:
@@ -42,14 +43,12 @@ fi
 
 printf 'Waiting for Supabase services to become ready'
 until STATUS_OUTPUT=$(supabase status 2>&1); do
-
   printf '.'
   sleep 2
 done
 printf '\n'
 
 echo "${STATUS_OUTPUT}"
-
 
 supabase status -o env \
   --override-name db.url=DATABASE_URL \
@@ -59,3 +58,6 @@ supabase status -o env \
   > "${ENV_FILE}"
 
 echo "Supabase environment exported to ${ENV_FILE}"
+
+"${SCRIPT_DIR}/sync-frontend-env.sh"
+
