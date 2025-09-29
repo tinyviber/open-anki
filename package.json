@@ -1,0 +1,26 @@
+{
+  "name": "open-anki",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bunx turbo run dev --parallel",
+    "build": "bunx turbo run build",
+    "lint": "bunx turbo run lint",
+    "test": "bunx turbo run test",
+    "dev:backend": "bunx turbo run dev --filter=packages/backend",
+    "build:backend": "bunx turbo run build --filter=packages/backend",
+    "lint:backend": "bunx turbo run lint --filter=packages/backend",
+    "test:backend": "bunx turbo run test --filter=packages/backend",
+    "dev:frontend": "bunx turbo run dev --filter=packages/frontend",
+    "build:frontend": "bunx turbo run build --filter=packages/frontend",
+    "lint:frontend": "bunx turbo run lint --filter=packages/frontend",
+    "build:shared": "bunx turbo run build --filter=packages/shared",
+    "lint:shared": "bunx turbo run lint --filter=packages/shared"
+  },
+  "devDependencies": {
+    "turbo": "^2.1.2"
+  },
+  "packageManager": "bun@1.2.14"
+}

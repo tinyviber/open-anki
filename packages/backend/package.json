@@ -9,7 +9,9 @@
     "migrate": "bunx node-pg-migrate up",
     "migrate:down": "bunx node-pg-migrate down",
     "seed": "bun run scripts/seed.ts",
-    "test": "bun test"
+    "test": "bun test",
+    "lint": "bunx tsc --noEmit",
+    "test:setup": "./scripts/prepare-test-db.sh"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.6",

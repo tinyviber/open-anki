@@ -4,5 +4,12 @@
   "type": "module",
   "dependencies": {
     "zod": "^3.23.8"
+  },
+  "scripts": {
+    "build": "bunx tsc -p tsconfig.json",
+    "lint": "bunx tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
   }
 }
