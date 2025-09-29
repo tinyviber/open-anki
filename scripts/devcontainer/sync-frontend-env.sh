@@ -26,7 +26,7 @@ set -a
 source "${SUPABASE_ENV_FILE}"
 set +a
 
-supabase_url="${SUPABASE_URL:-}"
+supabase_url="${DATABASE_URL:-}"
 if [[ -z "${supabase_url}" ]]; then
   supabase_url="${SUPABASE_REST_URL:-}"
 fi
