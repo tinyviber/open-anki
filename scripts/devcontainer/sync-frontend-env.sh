@@ -1,13 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Sync the Supabase connection details exposed via supabase/.env into the frontend package.
-#
-# Usage:
-#   ./scripts/devcontainer/sync-frontend-env.sh
-# The script is invoked automatically by bootstrap-supabase.sh but can also be run manually if
-# the generated credentials fall out of sync.
-
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
 SUPABASE_ENV_FILE="${REPO_ROOT}/supabase/.env"
@@ -26,7 +19,16 @@ set -a
 source "${SUPABASE_ENV_FILE}"
 set +a
 
-supabase_url="${DATABASE_URL:-}"
+supabase_url="${SUPABASE_URL:-}"
+
+# 如果没有 SUPABASE_URL，就从 DATABASE_URL 中提取 host 和 port
+if [[ -z "${supabase_url}" && -n "${DATABASE_URL:-}" ]]; then
+  # postgresql://user:pass@host:port/dbname
+  db_hostport=$(echo "${DATABASE_URL}" | sed -E 's|^postgresql://[^@]+@([^/]+)/.*$|\1|')
+  supabase_url="http://${db_hostport}"
+fi
+
+# fallback: 如果都没有，再试 SUPABASE_REST_URL
 if [[ -z "${supabase_url}" ]]; then
   supabase_url="${SUPABASE_REST_URL:-}"
 fi
