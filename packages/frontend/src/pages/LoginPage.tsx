@@ -27,7 +27,8 @@ export function LoginPage(): JSX.Element {
     setIsSubmitting(true);
 
     try {
-      await signIn({ email, password });
+      const normalizedEmail = email.trim();
+      await signIn({ email: normalizedEmail, password });
       const destination = state.from ?? '/';
       navigate(destination, { replace: true });
     } catch (err) {
