@@ -9,6 +9,24 @@ Additional package-specific documentation can be found within each package
 folder.
 
 - [Backend development workflow](docs/backend-development.md)
+- [迭代 TODO 清单](docs/TODO.md)
+
+## 开发脚本
+
+为了方便本地运行后端测试，仓库提供了一个辅助脚本：
+
+```bash
+./scripts/run-backend-tests.sh
+```
+
+该脚本会：
+
+1. 检查是否安装了 [Bun](https://bun.sh)。
+2. 如果缺少依赖则自动执行 `bun install`。
+3. 当环境变量 `DATABASE_URL` 已设置时，会预先运行迁移与种子脚本。
+4. 最后调用 `bun test` 执行现有的后端测试。
+
+如需传递额外的 Bun 测试参数，可附加在命令后，例如 `./scripts/run-backend-tests.sh --watch`。
 
 ## Supabase local stack
 
