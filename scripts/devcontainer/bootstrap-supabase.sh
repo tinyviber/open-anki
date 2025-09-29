@@ -10,6 +10,7 @@ set -euo pipefail
 # If Supabase refuses to start because it thinks another "supabase start" is already running,
 # run "supabase stop --force" first and then re-run this helper.
 
+
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
 ENV_FILE="${REPO_ROOT}/supabase/.env"
@@ -41,12 +42,14 @@ fi
 
 printf 'Waiting for Supabase services to become ready'
 until STATUS_OUTPUT=$(supabase status 2>&1); do
+
   printf '.'
   sleep 2
 done
 printf '\n'
 
 echo "${STATUS_OUTPUT}"
+
 
 supabase status -o env \
   --override-name db.url=DATABASE_URL \
