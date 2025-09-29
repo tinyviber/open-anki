@@ -8,7 +8,8 @@
     "build": "tsup src/index.ts --out-dir dist --format esm --platform node --target node18 --clean",
     "migrate": "bunx node-pg-migrate up",
     "migrate:down": "bunx node-pg-migrate down",
-    "seed": "bun run scripts/seed.ts"
+    "seed": "bun run scripts/seed.ts",
+    "test": "bun test"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.6",
