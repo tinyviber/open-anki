@@ -12,5 +12,6 @@
             "enableNonRootDocker": "true" // 自动配置非 Root 用户的权限
         }
 	},
-	"postCreateCommand": "bun install -g pm2 && echo 'export PATH=$PATH:/home/vscode/.bun/bin' >> /home/vscode/.bashrc"
+	"postCreateCommand": "bun install -g pm2 && echo 'export PATH=$PATH:/home/vscode/.bun/bin' >> /home/vscode/.bashrc",
+	"postStartCommand": "supabase start && supabase status -o env --override-name db.url=DATABASE_URL --override-name auth.jwt_secret=SUPABASE_JWT_SECRET --override-name auth.anon_key=SUPABASE_ANON_KEY --override-name auth.service_role_key=SUPABASE_SERVICE_ROLE_KEY > supabase/.env"
 }
