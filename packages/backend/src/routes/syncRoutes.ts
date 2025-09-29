@@ -95,6 +95,60 @@ const toStringOrNull = (value: unknown): string | null => {
     return null;
 };
 
+const UUID_REGEX =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const INTEGER_REGEX = /^[0-9]+$/;
+
+type SyncMetaIdType = 'uuid' | 'bigint' | 'text';
+
+const resolveSyncMetaIdType = async (client: QueryClient): Promise<SyncMetaIdType> => {
+    const queries = [
+        `
+            SELECT atttypid::regtype::text AS data_type
+            FROM pg_attribute
+            WHERE attrelid = 'sync_meta'::regclass AND attname = 'id'
+            LIMIT 1;
+        `,
+        `
+            SELECT data_type AS data_type
+            FROM information_schema.columns
+            WHERE table_name = 'sync_meta' AND column_name = 'id'
+            ORDER BY ordinal_position
+            LIMIT 1;
+        `,
+    ];
+
+    let dataType: string | undefined;
+
+    for (const query of queries) {
+        try {
+            const result = await client.query(query);
+            const row = result.rows[0] as { data_type?: string } | undefined;
+            if (row?.data_type) {
+                dataType = row.data_type;
+                break;
+            }
+        } catch {
+            // Try the next introspection strategy if the current one fails (e.g., pg-mem limitations)
+            continue;
+        }
+    }
+
+    if (dataType === 'uuid') {
+        return 'uuid';
+    }
+
+    if (dataType === 'bigint' || dataType === 'int8' || dataType === 'integer' || dataType === 'int4') {
+        return 'bigint';
+    }
+
+    if (dataType === 'text' || dataType === 'character varying' || dataType === 'varchar') {
+        return 'text';
+    }
+
+    throw new Error(`Unsupported sync_meta.id data type: ${dataType ?? 'unknown'}`);
+};
+
 const ensureFiniteMillis = (value: number, fieldName: string): number => {
     if (!Number.isFinite(value)) {
         throw new Error(`Expected ${fieldName} to be a finite millisecond timestamp but received ${value}`);
@@ -338,6 +392,8 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
             await client.query('BEGIN');
             await setRlsContext(client, userId);
 
+            const syncMetaIdType = await resolveSyncMetaIdType(client);
+
             const progressResult = await client.query(
                 `
                     SELECT last_version, last_meta_id, continuation_token
@@ -373,6 +429,25 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                     await client.query('ROLLBACK');
                     return reply.code(400).send({ error: 'Invalid continuation token supplied.' });
                 }
+                const isIdValidForSchema =
+                    (syncMetaIdType === 'uuid' && UUID_REGEX.test(decodedContinuation.id)) ||
+                    (syncMetaIdType === 'bigint' && INTEGER_REGEX.test(decodedContinuation.id)) ||
+                    syncMetaIdType === 'text';
+
+                if (!isIdValidForSchema) {
+                    fastify.log.warn(
+                        {
+                            userId,
+                            requestedSinceVersion,
+                            continuationToken: continuationTokenToUse,
+                            decodedContinuation,
+                            syncMetaIdType,
+                        },
+                        'Continuation token id did not match sync_meta.id schema; falling back to stored progress.'
+                    );
+                    decodedContinuation = null;
+                    continuationTokenToUse = null;
+                }
             }
 
             fastify.log.debug(
@@ -404,10 +479,12 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
             `;
 
             if (applyContinuation) {
+                const idCast =
+                    syncMetaIdType === 'uuid' ? '::uuid' : syncMetaIdType === 'bigint' ? '::bigint' : '';
                 sql = `
                     SELECT id, entity_id, entity_type, version, op, timestamp, payload
                     FROM sync_meta
-                    WHERE user_id = $1 AND (version > $2 OR (version = $3 AND id > $4))
+                    WHERE user_id = $1 AND (version > $2 OR (version = $3 AND id > $4${idCast}))
                     ORDER BY version ASC, id ASC
                     LIMIT $5;
                 `;
