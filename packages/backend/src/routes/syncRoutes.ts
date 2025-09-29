@@ -171,6 +171,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                 const latestVersionRow = latestVersionResult.rows[0] as LatestVersionRow | undefined;
                 const latestVersion = toNumberOrNull(latestVersionRow?.latest_version) ?? 0;
 
+
                 const response: SessionResponse = {
                     userId,
                     latestVersion,
@@ -458,6 +459,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
             } else {
                 metaResults = await client.query(baseSql, [userId, comparisonVersion, fetchLimit]);
             }
+
 
             const metaRowsRaw = metaResults.rows as SyncMetaRow[];
             const hasMore = metaRowsRaw.length > effectiveLimit;
