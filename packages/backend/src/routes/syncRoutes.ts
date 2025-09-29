@@ -429,6 +429,25 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                     await client.query('ROLLBACK');
                     return reply.code(400).send({ error: 'Invalid continuation token supplied.' });
                 }
+                const isIdValidForSchema =
+                    (syncMetaIdType === 'uuid' && UUID_REGEX.test(decodedContinuation.id)) ||
+                    (syncMetaIdType === 'bigint' && INTEGER_REGEX.test(decodedContinuation.id)) ||
+                    syncMetaIdType === 'text';
+
+                if (!isIdValidForSchema) {
+                    fastify.log.warn(
+                        {
+                            userId,
+                            requestedSinceVersion,
+                            continuationToken: continuationTokenToUse,
+                            decodedContinuation,
+                            syncMetaIdType,
+                        },
+                        'Continuation token id did not match sync_meta.id schema; falling back to stored progress.'
+                    );
+                    decodedContinuation = null;
+                    continuationTokenToUse = null;
+                }
             }
 
             fastify.log.debug(
@@ -511,6 +530,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
 
             if (applyContinuation) {
                 const idCast = syncMetaIdType === 'uuid' ? '::uuid' : syncMetaIdType === 'bigint' ? '::bigint' : '';
+
                 sql = `
                     SELECT id, entity_id, entity_type, version, op, timestamp, payload
                     FROM sync_meta
