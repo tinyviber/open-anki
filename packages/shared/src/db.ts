@@ -1,3 +1,12 @@
+import type {
+  CardPayload,
+  DeckPayload,
+  EntityType,
+  NotePayload,
+  OperationType,
+  ReviewLogPayload,
+} from './sync.js';
+
 export interface DeckConfig {
   description?: string;
   difficulty: 'easy' | 'medium' | 'hard' | 'auto';
@@ -60,9 +69,21 @@ export interface ReviewLog {
 }
 
 export interface SyncMeta {
+  id?: number;
   entityId: string;
-  entityType: string;
-  version: number;
-  op: 'create' | 'update' | 'delete';
+  entityType: EntityType;
+  op: OperationType;
   timestamp: number;
+  version?: number;
+  payload?: DeckPayload | NotePayload | CardPayload | ReviewLogPayload;
+  diff?: unknown;
+}
+
+export interface SyncState {
+  id: string;
+  deviceId: string;
+  lastPulledVersion: number;
+  latestServerVersion: number;
+  continuationToken: string | null;
+  lastSyncedAt?: number | null;
 }

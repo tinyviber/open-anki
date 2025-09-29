@@ -8,6 +8,8 @@ import { ReviewPage } from "./pages/ReviewPage";
 import { StatsPage } from "./pages/StatsPage";
 import { DecksPage } from "./pages/DecksPage";
 import { SettingsPage } from "./pages/SettingsPage"; // New import
+import { DeckDetailPage } from "./pages/DeckDetailPage";
+import { SyncProvider } from "./hooks/useSyncEngine";
 
 const router = createBrowserRouter([
   {
@@ -27,6 +29,10 @@ const router = createBrowserRouter([
         element: <DecksPage />,
       },
       {
+        path: "decks/:deckId",
+        element: <DeckDetailPage />,
+      },
+      {
         path: "stats",
         element: <StatsPage />,
       },
@@ -40,5 +46,9 @@ const router = createBrowserRouter([
 
 
 export default function App() {
-    return <RouterProvider router={router} />;
+    return (
+      <SyncProvider>
+        <RouterProvider router={router} />
+      </SyncProvider>
+    );
 }

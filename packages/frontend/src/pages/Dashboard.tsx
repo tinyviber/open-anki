@@ -47,8 +47,13 @@ export function Dashboard() {
     }
     
     return decks.map((deck) => (
-      // TODO: Wrap with Link to DeckDetailPage when implemented
-      <DeckCard key={deck.id} {...deck} />
+      <Link
+        key={deck.id}
+        to={`/decks/${deck.id}`}
+        className="group block focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 rounded-xl"
+      >
+        <DeckCard {...deck} />
+      </Link>
     ));
   }
   

@@ -1,6 +1,7 @@
 import type { DeckCardProps } from '@/components/DeckCard';
 import { db, type Deck } from './db';
 import { generateGUID } from '@/lib/guidUtils'; // 引入新的工具函数
+import type { DeckPayload } from '../../../../shared/src/sync.js';
 
 const DEFAULT_NOTE_TYPE_ID = "1-basic"; 
 
@@ -17,12 +18,14 @@ export async function createDeck({ name, description, difficulty }: { name: stri
   
   const trimmedName = name.trim();
 
+  const timestamp = Date.now();
+
   const newDeck: Deck = {
     id: generateGUID(),
     name: trimmedName,
     parentId: null,
     // Store description inside config as per model, providing a fallback name.
-    config: { 
+    config: {
         description: description?.trim() || trimmedName,
         difficulty: difficulty, // 👈 存储难度
         algorithmConfig: {
@@ -31,8 +34,14 @@ export async function createDeck({ name, description, difficulty }: { name: stri
             reviewLimit: 200,
         }
     },
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+
+  const deckPayload: DeckPayload = {
+    name: trimmedName,
+    description: description?.trim() ?? null,
+    config: newDeck.config,
   };
 
   const noteTypeExists = await db.noteTypes.get(DEFAULT_NOTE_TYPE_ID);
@@ -44,15 +53,16 @@ export async function createDeck({ name, description, difficulty }: { name: stri
   // 写入事务
   await db.transaction('rw', db.decks, db.syncMeta, async (tx) => {
     // 1. Add the Deck
-    await db.decks.add(newDeck); 
+    await db.decks.add(newDeck);
 
     // 2. Log the change for future sync
     await db.syncMeta.add({
         entityId: newDeck.id,
-        entityType: 'Deck',
-        version: Date.now(), 
+        entityType: 'deck',
         op: 'create',
-        timestamp: Date.now() 
+        timestamp,
+        payload: deckPayload,
+        diff: { name: { from: null, to: trimmedName } },
     });
   });
 

@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { ChevronLeft, ChevronsRight, HeartCrack, Lightbulb } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -45,14 +45,20 @@ const gradeButtons = [
 export function ReviewPage() {
     const [isShowingBack, setIsShowingBack] = React.useState(false);
     // Use an internal state queue for UX control, updated from liveDueCards
-    const [cardQueue, setCardQueue] = React.useState<CardEntity[] | undefined>(undefined); 
+    const [cardQueue, setCardQueue] = React.useState<CardEntity[] | undefined>(undefined);
     const [isSubmitting, setIsSubmitting] = React.useState(false);
-    
+    const [searchParams] = useSearchParams();
+    const deckFilter = searchParams.get('deckId') ?? undefined;
+
     // Live query for due cards: this is the source of truth for all due cards
-    const liveDueCards = useLiveQuery(() => getDueCards(), []);
+    const liveDueCards = useLiveQuery(() => getDueCards(deckFilter), [deckFilter]);
     
     // Load Note Types (e.g., "1-basic") and current Deck for context
     const basicNoteType = useLiveQuery(() => db.noteTypes.get("1-basic"), []);
+    const filteredDeckInfo = useLiveQuery(
+        () => (deckFilter ? db.decks.get(deckFilter) : undefined),
+        [deckFilter]
+    );
 
     React.useEffect(() => {
         if (liveDueCards) {
@@ -157,9 +163,11 @@ export function ReviewPage() {
     const progressValue = initialDueCount > 0 ? 
         Math.round(((initialDueCount - cardsRemaining) / initialDueCount) * 100) : 100;
 
+    const headerSuffix = deckFilter && filteredDeckInfo ? ` · ${filteredDeckInfo.name}` : '';
+
     return (
         <div className="space-y-6">
-            <h1 className="text-3xl font-bold tracking-tight">今日复习 ({cardsRemaining} 张剩余)</h1>
+            <h1 className="text-3xl font-bold tracking-tight">今日复习{headerSuffix} ({cardsRemaining} 张剩余)</h1>
 
             <div className="max-w-xl mx-auto space-y-4">
                  <Progress value={progressValue} className="h-2" />
