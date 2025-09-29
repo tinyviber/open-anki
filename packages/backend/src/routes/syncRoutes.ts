@@ -493,6 +493,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                 metaResults = await client.query(baseSql, [userId, comparisonVersion, fetchLimit]);
             }
 
+
             const metaRowsRaw = metaResults.rows as SyncMetaRow[];
             const hasMore = metaRowsRaw.length > effectiveLimit;
             const metaRows = hasMore ? metaRowsRaw.slice(0, effectiveLimit) : metaRowsRaw;
