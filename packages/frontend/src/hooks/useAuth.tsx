@@ -7,6 +7,7 @@ import type {
 } from '@supabase/supabase-js';
 import { supabaseClient } from '@/core/auth/supabaseClient';
 import { db } from '@/core/db/db';
+import { clearStoredDeviceId } from '@/core/sync/syncClient';
 
 async function clearDatabase(): Promise<void> {
   try {
@@ -33,6 +34,8 @@ async function clearDatabase(): Promise<void> {
     );
   } catch (error) {
     console.error('Failed to clear local database during sign-out', error);
+  } finally {
+    clearStoredDeviceId();
   }
 }
 

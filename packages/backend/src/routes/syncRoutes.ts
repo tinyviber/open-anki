@@ -27,7 +27,7 @@ import {
     decodeContinuationToken,
     encodeContinuationToken,
 } from '../../../shared/src/sync.js';
-import { getQueryClient, query, type QueryClient } from '../db/pg-service.js';
+import { getQueryClient, type QueryClient } from '../db/pg-service.js';
 
 type EntityType = SyncOp['entityType'];
 type OperationType = SyncOp['op'];
@@ -95,6 +95,43 @@ const toStringOrNull = (value: unknown): string | null => {
     return null;
 };
 
+const toMetaIdStringOrNull = (value: unknown): string | null => {
+    if (value === null || value === undefined) {
+        return null;
+    }
+    if (typeof value === 'number') {
+        return Number.isInteger(value) ? String(value) : null;
+    }
+    if (typeof value === 'bigint') {
+        return value.toString();
+    }
+    if (typeof value === 'string') {
+        return value;
+    }
+    return null;
+};
+
+const toMetaIdIntegerOrNull = (value: unknown): number | null => {
+    if (value === null || value === undefined) {
+        return null;
+    }
+    if (typeof value === 'number') {
+        return Number.isSafeInteger(value) ? value : null;
+    }
+    if (typeof value === 'bigint') {
+        const numericValue = Number(value);
+        return Number.isSafeInteger(numericValue) ? numericValue : null;
+    }
+    if (typeof value === 'string') {
+        if (!/^-?\d+$/.test(value)) {
+            return null;
+        }
+        const parsed = Number.parseInt(value, 10);
+        return Number.isSafeInteger(parsed) ? parsed : null;
+    }
+    return null;
+};
+
 const ensureFiniteMillis = (value: number, fieldName: string): number => {
     if (!Number.isFinite(value)) {
         throw new Error(`Expected ${fieldName} to be a finite millisecond timestamp but received ${value}`);
@@ -114,43 +151,74 @@ const toRequiredNumber = (value: unknown, fieldName: string): number => {
     return numericValue;
 };
 
+const setRlsContext = async (client: QueryClient, userId: string) => {
+    await client.query(`SELECT set_config('request.jwt.claim.sub', $1, true);`, [userId]);
+    await client.query(`SELECT set_config('request.jwt.claim.role', $1, true);`, ['authenticated']);
+};
+
 export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
     fastify.setValidatorCompiler(validatorCompiler);
     fastify.setSerializerCompiler(serializerCompiler);
     const typedFastify = fastify.withTypeProvider<ZodTypeProvider>();
 
     typedFastify.get(
-      '/session',
-      {
-          schema: {
-              response: {
-                  200: sessionResponseSchema,
-              },
-          },
-      },
-      async request => {
-        const userId = request.user.id;
-        const latestVersionResult = await query(
-            `
-                SELECT COALESCE(MAX(version), 0) AS latest_version
-                FROM sync_meta
-                WHERE user_id = $1;
-            `,
-            [userId]
-        );
+        '/session',
+        {
+            schema: {
+                response: {
+                    200: sessionResponseSchema,
+                },
+            },
+        },
+        async (request, reply) => {
+            const userId = request.user.id;
+            const client = await getQueryClient();
 
-        const latestVersionRow = latestVersionResult.rows[0] as LatestVersionRow | undefined;
-        const latestVersion = toNumberOrNull(latestVersionRow?.latest_version) ?? 0;
+            try {
+                await client.query('BEGIN');
+                await setRlsContext(client, userId);
 
-        const response: SessionResponse = {
-            userId,
-            latestVersion,
-            serverTimestamp: Date.now(),
-            defaultPullLimit: DEFAULT_PULL_LIMIT,
-        };
+                const latestVersionResult = await client.query(
+                    `
+                        SELECT COALESCE(MAX(version), 0) AS latest_version
+                        FROM sync_meta
+                        WHERE user_id = $1;
+                    `,
+                    [userId]
+                );
 
-        return response;
-      }
+                await client.query('COMMIT');
+
+                const latestVersionRow = latestVersionResult.rows[0] as LatestVersionRow | undefined;
+                const latestVersion = toNumberOrNull(latestVersionRow?.latest_version) ?? 0;
+
+                const response: SessionResponse = {
+                    userId,
+                    latestVersion,
+                    serverTimestamp: Date.now(),
+                    defaultPullLimit: DEFAULT_PULL_LIMIT,
+                };
+
+                return reply.send(response);
+            } catch (error) {
+                request.log.error({ err: error, userId }, 'Failed to establish sync session');
+                try {
+                    await client.query('ROLLBACK');
+                } catch (rollbackError) {
+                    request.log.error(
+                        { err: rollbackError, userId },
+                        'Failed to rollback transaction for sync session request'
+                    );
+                }
+                return reply.code(500).send({
+                    statusCode: 500,
+                    error: 'Internal Server Error',
+                    message: 'Failed to establish sync session.',
+                });
+            } finally {
+                client.release();
+            }
+        }
     );
 
     typedFastify.post(
@@ -175,6 +243,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
 
         try {
             await client.query('BEGIN');
+            await setRlsContext(client, userId);
 
             for (const op of ops) {
                 const version = op.version;
@@ -300,9 +369,13 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
         const effectiveLimit = Number.isFinite(limit) ? limit : DEFAULT_PULL_LIMIT;
         const effectiveDeviceId = deviceId ?? DEFAULT_PULL_DEVICE_ID;
         const fetchLimit = effectiveLimit + 1;
+        const client = await getQueryClient();
 
         try {
-            const progressResult = await query(
+            await client.query('BEGIN');
+            await setRlsContext(client, userId);
+
+            const progressResult = await client.query(
                 `
                     SELECT last_version, last_meta_id, continuation_token
                     FROM device_sync_progress
@@ -314,13 +387,15 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
 
             const existingProgress = progressResult.rows[0] as DeviceProgressRow | undefined;
             const storedVersion = toNumberOrNull(existingProgress?.last_version) ?? 0;
-            const storedLastMetaId = toStringOrNull(existingProgress?.last_meta_id);
+            const storedLastMetaId = toMetaIdStringOrNull(existingProgress?.last_meta_id);
 
             const hasRequestedSince =
                 typeof requestedSinceVersion === 'number' && Number.isFinite(requestedSinceVersion);
             const effectiveSinceVersion = hasRequestedSince ? requestedSinceVersion! : storedVersion;
 
             let continuationTokenToUse = continuationToken ?? null;
+            let continuationMetaId: string | null = null;
+            let continuationMetaIdNumeric: number | null = null;
             if (!continuationTokenToUse && !hasRequestedSince && existingProgress?.continuation_token) {
                 continuationTokenToUse = existingProgress.continuation_token;
             }
@@ -329,11 +404,14 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
             if (continuationTokenToUse) {
                 try {
                     decodedContinuation = decodeContinuationToken(continuationTokenToUse);
+                    continuationMetaId = toMetaIdStringOrNull(decodedContinuation.id);
+                    continuationMetaIdNumeric = toMetaIdIntegerOrNull(decodedContinuation.id);
                 } catch (error) {
                     fastify.log.warn(
                         { userId, requestedSinceVersion, continuationToken: continuationTokenToUse, err: error },
                         'Invalid continuation token provided to /pull'
                     );
+                    await client.query('ROLLBACK');
                     return reply.code(400).send({ error: 'Invalid continuation token supplied.' });
                 }
             }
@@ -350,15 +428,12 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                 'Processing sync pull request'
             );
 
-            const applyContinuation =
-                decodedContinuation !== null && decodedContinuation.version >= effectiveSinceVersion;
+            const comparisonVersion = Math.max(
+                effectiveSinceVersion,
+                decodedContinuation?.version ?? effectiveSinceVersion
+            );
 
-            const comparisonVersion = applyContinuation
-                ? Math.max(effectiveSinceVersion, decodedContinuation!.version)
-                : effectiveSinceVersion;
-
-            const params: unknown[] = [userId, comparisonVersion];
-            let sql = `
+            const baseSql = `
                 SELECT id, entity_id, entity_type, version, op, timestamp, payload
                 FROM sync_meta
                 WHERE user_id = $1 AND version > $2
@@ -366,26 +441,63 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                 LIMIT $3;
             `;
 
-            if (applyContinuation) {
-                sql = `
-                    SELECT id, entity_id, entity_type, version, op, timestamp, payload
-                    FROM sync_meta
-                    WHERE user_id = $1 AND (version > $2 OR (version = $3 AND id > $4))
-                    ORDER BY version ASC, id ASC
-                    LIMIT $5;
-                `;
-                params.push(decodedContinuation!.version, decodedContinuation!.id, fetchLimit);
-            } else {
-                params.push(fetchLimit);
-            }
+            const continuationSql = `
+                SELECT id, entity_id, entity_type, version, op, timestamp, payload
+                FROM sync_meta
+                WHERE user_id = $1 AND (version > $2 OR (version = $3 AND id > $4))
+                ORDER BY version ASC, id ASC
+                LIMIT $5;
+            `;
 
-            const metaResults = await query(sql, params);
+            let metaResults;
+            let continuationApplied = false;
+            if (decodedContinuation && continuationMetaId && continuationMetaIdNumeric !== null) {
+                try {
+                    metaResults = await client.query(continuationSql, [
+                        userId,
+                        comparisonVersion,
+                        decodedContinuation.version,
+                        continuationMetaIdNumeric,
+                        fetchLimit,
+                    ]);
+                    continuationApplied = true;
+                } catch (error) {
+                    if ((error as { code?: string }).code === '22P02') {
+                        fastify.log.warn(
+                            {
+                                userId,
+                                requestedSinceVersion,
+                                continuationToken: continuationTokenToUse,
+                                decodedId: decodedContinuation.id,
+                                err: error,
+                            },
+                            'Falling back to version-only pagination due to incompatible continuation meta id.'
+                        );
+                        metaResults = await client.query(baseSql, [userId, comparisonVersion, fetchLimit]);
+                    } else {
+                        throw error;
+                    }
+                }
+            } else if (decodedContinuation && continuationMetaId && continuationMetaIdNumeric === null) {
+                fastify.log.warn(
+                    {
+                        userId,
+                        requestedSinceVersion,
+                        continuationToken: continuationTokenToUse,
+                        decodedId: decodedContinuation.id,
+                    },
+                    'Continuation token meta id is not numeric; using version-only pagination instead.'
+                );
+                metaResults = await client.query(baseSql, [userId, comparisonVersion, fetchLimit]);
+            } else {
+                metaResults = await client.query(baseSql, [userId, comparisonVersion, fetchLimit]);
+            }
 
             const metaRowsRaw = metaResults.rows as SyncMetaRow[];
             const hasMore = metaRowsRaw.length > effectiveLimit;
             const metaRows = hasMore ? metaRowsRaw.slice(0, effectiveLimit) : metaRowsRaw;
 
-            const ops = await Promise.all(metaRows.map(row => mapMetaRowToOp(row, userId)));
+            const ops = await Promise.all(metaRows.map(row => mapMetaRowToOp(client, row, userId)));
 
             const baselineVersion = Math.max(
                 effectiveSinceVersion,
@@ -393,24 +505,26 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
             );
             const highestVersion = ops.length > 0 ? ops[ops.length - 1].version : baselineVersion;
 
+            const nextTokenCandidate =
+                metaRows.length > 0 ? toMetaIdStringOrNull(metaRows[metaRows.length - 1].id) : null;
             const nextToken =
-                hasMore && metaRows.length > 0
+                hasMore && metaRows.length > 0 && nextTokenCandidate
                     ? encodeContinuationToken(
                           Number(metaRows[metaRows.length - 1].version),
-                          String(metaRows[metaRows.length - 1].id)
-                      )
+                          nextTokenCandidate
+                    )
                     : null;
 
-            let lastMetaIdValue = metaRows.length > 0 ? toStringOrNull(metaRows[metaRows.length - 1].id) : null;
+            let lastMetaIdValue = metaRows.length > 0 ? nextTokenCandidate : null;
             if (lastMetaIdValue === null) {
-                if (applyContinuation && decodedContinuation) {
-                    lastMetaIdValue = decodedContinuation.id;
+                if (continuationApplied) {
+                    lastMetaIdValue = continuationMetaId;
                 } else {
                     lastMetaIdValue = storedLastMetaId ?? null;
                 }
             }
 
-            await query(
+            await client.query(
                 `
                     INSERT INTO device_sync_progress (user_id, device_id, last_version, last_meta_id, continuation_token, updated_at)
                     VALUES ($1, $2, $3, $4, $5, NOW())
@@ -424,6 +538,8 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                 [userId, effectiveDeviceId, highestVersion, lastMetaIdValue, nextToken]
             );
 
+            await client.query('COMMIT');
+
             const response: PullResponse = {
                 ops,
                 newVersion: highestVersion,
@@ -434,8 +550,21 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
             return reply.send(response);
 
         } catch (error) {
-            fastify.log.error('Sync Pull failed:', error);
-            reply.code(500).send({ error: 'Error pulling changes.' });
+            fastify.log.error(
+                { err: error, userId, deviceId: effectiveDeviceId },
+                'Sync Pull failed'
+            );
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                fastify.log.error(
+                    { err: rollbackError, userId, deviceId: effectiveDeviceId },
+                    'Failed to rollback transaction for sync pull'
+                );
+            }
+            return reply.code(500).send({ error: 'Error pulling changes.' });
+        } finally {
+            client.release();
         }
     });
 };
@@ -625,13 +754,38 @@ async function handleReviewLogOperation(client: QueryClient, userId: string, op:
 }
 
 // Helper function to fetch entity data for pull operations
-async function fetchEntityData(userId: string, entityId: string, entityType: 'deck'): Promise<DeckPayload | null>;
-async function fetchEntityData(userId: string, entityId: string, entityType: 'note'): Promise<NotePayload | null>;
-async function fetchEntityData(userId: string, entityId: string, entityType: 'card'): Promise<CardPayload | null>;
-async function fetchEntityData(userId: string, entityId: string, entityType: 'review_log'): Promise<ReviewLogPayload | null>;
-async function fetchEntityData(userId: string, entityId: string, entityType: EntityType) {
+async function fetchEntityData(
+    client: QueryClient,
+    userId: string,
+    entityId: string,
+    entityType: 'deck'
+): Promise<DeckPayload | null>;
+async function fetchEntityData(
+    client: QueryClient,
+    userId: string,
+    entityId: string,
+    entityType: 'note'
+): Promise<NotePayload | null>;
+async function fetchEntityData(
+    client: QueryClient,
+    userId: string,
+    entityId: string,
+    entityType: 'card'
+): Promise<CardPayload | null>;
+async function fetchEntityData(
+    client: QueryClient,
+    userId: string,
+    entityId: string,
+    entityType: 'review_log'
+): Promise<ReviewLogPayload | null>;
+async function fetchEntityData(
+    client: QueryClient,
+    userId: string,
+    entityId: string,
+    entityType: EntityType
+) {
     if (entityType === 'deck') {
-        const result = await query(
+        const result = await client.query(
             'SELECT name, description, config FROM decks WHERE id = $1 AND user_id = $2',
             [entityId, userId]
         );
@@ -644,7 +798,7 @@ async function fetchEntityData(userId: string, entityId: string, entityType: Ent
         });
     }
     if (entityType === 'note') {
-        const result = await query(
+        const result = await client.query(
             'SELECT deck_id, model_name, fields, tags FROM notes WHERE id = $1 AND user_id = $2',
             [entityId, userId]
         );
@@ -658,7 +812,7 @@ async function fetchEntityData(userId: string, entityId: string, entityType: Ent
         });
     }
     if (entityType === 'card') {
-        const result = await query(
+        const result = await client.query(
             'SELECT note_id, ordinal, due, interval, ease_factor, reps, lapses, card_type, queue, original_due FROM cards WHERE id = $1 AND user_id = $2',
             [entityId, userId]
         );
@@ -677,7 +831,7 @@ async function fetchEntityData(userId: string, entityId: string, entityType: Ent
             original_due: row.original_due != null ? Number(row.original_due) : null,
         });
     }
-    const result = await query(
+    const result = await client.query(
         'SELECT card_id, timestamp, rating, duration_ms FROM review_logs WHERE id = $1 AND user_id = $2',
         [entityId, userId]
     );
@@ -691,13 +845,17 @@ async function fetchEntityData(userId: string, entityId: string, entityType: Ent
     });
 }
 
-async function mapMetaRowToOp(row: SyncMetaRow, userId: string): Promise<SyncOp> {
+async function mapMetaRowToOp(client: QueryClient, row: SyncMetaRow, userId: string): Promise<SyncOp> {
     const version = Number(row.version);
     const timestamp = toMillis(row.timestamp);
 
     if (row.entity_type === 'deck') {
         if (row.op === 'create' || row.op === 'update') {
-            const payload = resolvePayload(await fetchEntityData(userId, row.entity_id, 'deck'), row, deckPayloadSchema);
+            const payload = resolvePayload(
+                await fetchEntityData(client, userId, row.entity_id, 'deck'),
+                row,
+                deckPayloadSchema
+            );
             const op: DeckOp = {
                 entityId: row.entity_id,
                 entityType: 'deck',
@@ -720,7 +878,11 @@ async function mapMetaRowToOp(row: SyncMetaRow, userId: string): Promise<SyncOp>
 
     if (row.entity_type === 'note') {
         if (row.op === 'create' || row.op === 'update') {
-            const payload = resolvePayload(await fetchEntityData(userId, row.entity_id, 'note'), row, notePayloadSchema);
+            const payload = resolvePayload(
+                await fetchEntityData(client, userId, row.entity_id, 'note'),
+                row,
+                notePayloadSchema
+            );
             const op: NoteOp = {
                 entityId: row.entity_id,
                 entityType: 'note',
@@ -743,7 +905,11 @@ async function mapMetaRowToOp(row: SyncMetaRow, userId: string): Promise<SyncOp>
 
     if (row.entity_type === 'card') {
         if (row.op === 'create' || row.op === 'update') {
-            const payload = resolvePayload(await fetchEntityData(userId, row.entity_id, 'card'), row, cardPayloadSchema);
+            const payload = resolvePayload(
+                await fetchEntityData(client, userId, row.entity_id, 'card'),
+                row,
+                cardPayloadSchema
+            );
             const op: CardOp = {
                 entityId: row.entity_id,
                 entityType: 'card',
@@ -765,7 +931,11 @@ async function mapMetaRowToOp(row: SyncMetaRow, userId: string): Promise<SyncOp>
     }
 
     if (row.op === 'create' || row.op === 'update') {
-        const payload = resolvePayload(await fetchEntityData(userId, row.entity_id, 'review_log'), row, reviewLogPayloadSchema);
+        const payload = resolvePayload(
+            await fetchEntityData(client, userId, row.entity_id, 'review_log'),
+            row,
+            reviewLogPayloadSchema
+        );
         const op: ReviewLogOp = {
             entityId: row.entity_id,
             entityType: 'review_log',
