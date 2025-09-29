@@ -21,16 +21,16 @@ set +a
 
 supabase_url="${SUPABASE_URL:-}"
 
-# 如果没有 SUPABASE_URL，就从 DATABASE_URL 中提取 host 和 port
-if [[ -z "${supabase_url}" && -n "${DATABASE_URL:-}" ]]; then
-  # postgresql://user:pass@host:port/dbname
-  db_hostport=$(echo "${DATABASE_URL}" | sed -E 's|^postgresql://[^@]+@([^/]+)/.*$|\1|')
-  supabase_url="http://${db_hostport}"
+# 优先使用 Supabase 提供的 REST URL（本地 CLI 会写入 127.0.0.1:54321）
+if [[ -z "${supabase_url}" && -n "${SUPABASE_REST_URL:-}" ]]; then
+  supabase_url="${SUPABASE_REST_URL}"
 fi
 
-# fallback: 如果都没有，再试 SUPABASE_REST_URL
-if [[ -z "${supabase_url}" ]]; then
-  supabase_url="${SUPABASE_REST_URL:-}"
+# 如果仍然缺失，再从 DATABASE_URL 中提取 host，并回退到默认 API 端口
+if [[ -z "${supabase_url}" && -n "${DATABASE_URL:-}" ]]; then
+  # postgresql://user:pass@host:port/dbname
+  db_host=$(echo "${DATABASE_URL}" | sed -E 's|^postgresql://[^@]+@([^/:]+)(:[0-9]+)?/.*$|\1|')
+  supabase_url="http://${db_host}:54321"
 fi
 
 supabase_anon_key="${SUPABASE_ANON_KEY:-}"
