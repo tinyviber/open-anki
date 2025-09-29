@@ -1,0 +1,64 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalDependencies": [
+    "package.json",
+    "turbo.json",
+    "bun.lock",
+    "bun.lockb",
+    "packages/*/bun.lock",
+    "packages/*/package.json"
+  ],
+  "globalEnv": [
+    "DATABASE_URL",
+    "SUPABASE_DB_URL",
+    "SUPABASE_POSTGRES_URL",
+    "SUPABASE_CONNECTION_STRING"
+  ],
+  "tasks": {
+    "dev": {
+      "dependsOn": ["^dev"],
+      "cache": false,
+      "persistent": true
+    },
+    "build": {
+      "dependsOn": ["^build", "lint"],
+      "outputs": [
+        "dist/**",
+        "build/**",
+        "tsconfig.tsbuildinfo"
+      ]
+    },
+    "lint": {
+      "dependsOn": ["^lint"],
+      "outputs": []
+    },
+    "migrate": {
+      "cache": false,
+      "outputs": []
+    },
+    "seed": {
+      "dependsOn": ["migrate"],
+      "cache": false,
+      "outputs": []
+    },
+    "test:setup": {
+      "dependsOn": ["seed"],
+      "cache": false,
+      "outputs": []
+    },
+    "test": {
+      "dependsOn": ["^test", "test:setup"],
+      "inputs": [
+        "src/**",
+        "test/**",
+        "tests/**",
+        "package.json",
+        "tsconfig.json"
+      ],
+      "outputs": [
+        "coverage/**",
+        "test-results/**"
+      ]
+    }
+  }
+}

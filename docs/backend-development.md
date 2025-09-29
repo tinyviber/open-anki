@@ -5,15 +5,22 @@ introducing the bundled production build.
 
 ## Local development
 
-- Install dependencies with `bun install` from `packages/backend`.
+- Install dependencies with `bun install` from the repository root. The project
+  now uses Turborepo workspaces, so a single install prepares dependencies for the
+  backend, frontend, and shared packages while downloading the Turborepo CLI.
 - Provision a database. The backend auto-detects Supabase CLI environments, so
   starting Supabase locally with `supabase start` is the easiest option. You can
   alternatively export `DATABASE_URL` when connecting to a remote Postgres.
-- Apply database migrations and seed fixtures with `bun run migrate` followed by
-  `bun run seed`. These scripts use [`node-pg-migrate`](https://github.com/salsita/node-pg-migrate)
-  under the hood and will reuse the same connection string as the server.
-- Run the API in watch mode with `bun run dev`. The command continues to start
-  the Fastify server directly from TypeScript and supports Bun's hot reload.
+- Apply database migrations and seed fixtures with
+  `bunx turbo run migrate --filter=packages/backend` followed by
+  `bunx turbo run seed --filter=packages/backend`. The helper task
+  `test:setup` 在检测到 `DATABASE_URL` 时会作为测试前置步骤自动执行上述命令。
+- Run the API in watch mode with `bun run dev:backend`. The command delegates to
+  Turborepo which in turn runs the package-level `bun run dev`. You can still
+  start it manually from `packages/backend` if you prefer.
+- Execute the backend test suite with `bun run test:backend`. Additional Bun
+  flags (for example `--watch`) can be appended after `--` and will be forwarded
+  to `bun test`.
 - Environment variables can be supplied through your shell or a `.env` file.
   `NODE_ENV` defaults to `development` during local work which enables the
   pretty logger transport.
@@ -22,12 +29,12 @@ introducing the bundled production build.
   tokens can be verified during request authentication.
 
 When you need a clean slate, stop the Supabase stack with `supabase stop` and
-reset the database with `supabase db reset`, then rerun `bun run migrate && bun
-run seed`.
+reset the database with `supabase db reset`, then rerun the migration and seed
+commands from above.
 
 ## Production build
 
-- Create a production bundle with `bun run build`.
+- Create a production bundle with `bun run build:backend`.
 - The script uses `tsup` to emit an ESM bundle to `dist/index.js`.
 - Start the bundled server with `bun run start` (or `node dist/index.js`).
 - When `NODE_ENV=production`, logs are emitted as structured JSON. You can

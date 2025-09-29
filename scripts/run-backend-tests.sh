@@ -2,29 +2,27 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BACKEND_DIR="$ROOT_DIR/packages/backend"
+WORKSPACE_FILTER="packages/backend"
 
 if ! command -v bun >/dev/null 2>&1; then
   echo "[run-backend-tests] bun 未安装，请先安装 Bun 再运行此脚本。" >&2
   exit 1
 fi
 
-pushd "$BACKEND_DIR" >/dev/null
+pushd "$ROOT_DIR" >/dev/null
 
 if [ ! -d "node_modules" ]; then
-  echo "[run-backend-tests] 正在安装 backend 依赖..."
+  echo "[run-backend-tests] 检测到首次运行，正在安装工作区依赖..."
   bun install
 fi
 
 if [[ -n "${DATABASE_URL:-}" ]]; then
-  echo "[run-backend-tests] 检测到 DATABASE_URL，自动执行迁移与种子数据。"
-  bun run migrate
-  bun run seed
+  echo "[run-backend-tests] DATABASE_URL 已设置，Turbo 将在测试前执行迁移与种子任务。"
 else
-  echo "[run-backend-tests] 未设置 DATABASE_URL，跳过数据库迁移与种子步骤（测试将使用内存数据库/桩）。"
+  echo "[run-backend-tests] 未设置 DATABASE_URL，迁移与种子任务将跳过并使用默认的本地连接字符串。"
 fi
 
-echo "[run-backend-tests] 开始执行 Bun 测试..."
-bun test "$@"
+echo "[run-backend-tests] 通过 Turborepo 调度后端测试..."
+bunx turbo run test --filter="$WORKSPACE_FILTER" -- "$@"
 
 popd >/dev/null
