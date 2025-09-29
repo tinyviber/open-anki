@@ -53,3 +53,53 @@ export function formatDuration(ms: number): string {
 
   return `${minutes}分${seconds}秒`;
 }
+
+/**
+ * Formats a timestamp relative to "now", returning a short human readable string.
+ * Handles both past and future timestamps.
+ */
+export function formatRelativeTime(
+  timestamp: number | undefined,
+  { now = Date.now() }: { now?: number } = {},
+): string | undefined {
+  if (!timestamp) return undefined;
+
+  const diff = now - timestamp;
+  const absDiff = Math.abs(diff);
+
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  const week = 7 * day;
+
+  const format = (value: number, unit: string, isPast: boolean) =>
+    `${value}${unit}${isPast ? '前' : '后'}`;
+
+  if (absDiff < 30 * 1000) {
+    return diff >= 0 ? '刚刚' : '马上';
+  }
+
+  if (absDiff < minute) {
+    return format(Math.max(1, Math.round(absDiff / 1000)), '秒', diff >= 0);
+  }
+
+  if (absDiff < hour) {
+    return format(Math.max(1, Math.round(absDiff / minute)), '分钟', diff >= 0);
+  }
+
+  if (absDiff < day) {
+    return format(Math.max(1, Math.round(absDiff / hour)), '小时', diff >= 0);
+  }
+
+  if (absDiff < week) {
+    return format(Math.max(1, Math.round(absDiff / day)), '天', diff >= 0);
+  }
+
+  const weeks = Math.round(absDiff / week);
+  if (weeks <= 4) {
+    return format(Math.max(1, weeks), '周', diff >= 0);
+  }
+
+  const target = new Date(timestamp);
+  return `${target.getFullYear()}-${target.getMonth() + 1}-${target.getDate()}`;
+}

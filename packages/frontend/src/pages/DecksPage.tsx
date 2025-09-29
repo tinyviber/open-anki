@@ -4,6 +4,7 @@ import { DeckCard } from "@/components/DeckCard";
 import { NewDeckDialog } from "@/components/NewDeckDialog";
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
+import { Link } from "react-router-dom";
 
 
 export function DecksPage() {
@@ -34,8 +35,9 @@ export function DecksPage() {
       ) : (
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {decks.map((deck) => (
-            // Note: In a real app, this should link to the Deck Details Page
-            <DeckCard key={deck.id} {...deck} />
+            <Link key={deck.id} to={`/decks/${deck.id}`} className="group block focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 rounded-xl">
+              <DeckCard {...deck} />
+            </Link>
           ))}
         </div>
       )}

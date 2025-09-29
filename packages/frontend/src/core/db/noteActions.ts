@@ -57,32 +57,14 @@ export async function createNoteAndCards({
   });
   
 
-  await db.transaction('rw', db.notes, db.cards, db.syncMeta, async (tx) => {
+  await db.transaction('rw', db.notes, db.cards, async () => {
     // 1. Add the Note
-    await db.notes.add(newNote); 
-    
+    await db.notes.add(newNote);
+
     // 2. Add the derived Cards
     if (newCards.length > 0) {
         await db.cards.bulkAdd(newCards);
     }
-
-    // 3. Log changes for sync 
-    await db.syncMeta.bulkAdd([
-        {
-            entityId: newNote.id,
-            entityType: 'Note',
-            version: Date.now(), 
-            op: 'create',
-            timestamp: Date.now() 
-        },
-         ...newCards.map(c => ({
-            entityId: c.id,
-            entityType: 'Card',
-            version: Date.now(),
-            op: 'create',
-            timestamp: Date.now()
-        } as const))
-    ]);
   });
 
   return newNote.id;

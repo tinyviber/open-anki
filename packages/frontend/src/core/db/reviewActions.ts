@@ -125,18 +125,12 @@ export async function gradeCard(cardId: string, rating: ReviewLog['rating']): Pr
   };
   
   // 5. Atomic Update and Logging
-  await db.transaction('rw', db.cards, db.reviewLogs, db.syncMeta, async () => {
+  await db.transaction('rw', db.cards, db.reviewLogs, async () => {
     // a. Update the card
     await db.cards.update(cardId, updatedCard);
-    
+
     // b. Add the log entry
     await db.reviewLogs.add(reviewLog);
-
-    // c. Log changes for sync
-    await db.syncMeta.bulkAdd([
-      { entityId: cardId, entityType: 'Card', version: Date.now(), op: 'update', timestamp: Date.now() },
-      { entityId: reviewLog.id, entityType: 'ReviewLog', version: Date.now(), op: 'create', timestamp: Date.now() }
-    ]);
   });
 }
 
