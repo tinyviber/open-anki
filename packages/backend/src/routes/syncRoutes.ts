@@ -95,6 +95,60 @@ const toStringOrNull = (value: unknown): string | null => {
     return null;
 };
 
+const UUID_REGEX =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const INTEGER_REGEX = /^[0-9]+$/;
+
+type SyncMetaIdType = 'uuid' | 'bigint' | 'text';
+
+const resolveSyncMetaIdType = async (client: QueryClient): Promise<SyncMetaIdType> => {
+    const queries = [
+        `
+            SELECT atttypid::regtype::text AS data_type
+            FROM pg_attribute
+            WHERE attrelid = 'sync_meta'::regclass AND attname = 'id'
+            LIMIT 1;
+        `,
+        `
+            SELECT data_type AS data_type
+            FROM information_schema.columns
+            WHERE table_name = 'sync_meta' AND column_name = 'id'
+            ORDER BY ordinal_position
+            LIMIT 1;
+        `,
+    ];
+
+    let dataType: string | undefined;
+
+    for (const query of queries) {
+        try {
+            const result = await client.query(query);
+            const row = result.rows[0] as { data_type?: string } | undefined;
+            if (row?.data_type) {
+                dataType = row.data_type;
+                break;
+            }
+        } catch {
+            // Try the next introspection strategy if the current one fails (e.g., pg-mem limitations)
+            continue;
+        }
+    }
+
+    if (dataType === 'uuid') {
+        return 'uuid';
+    }
+
+    if (dataType === 'bigint' || dataType === 'int8' || dataType === 'integer' || dataType === 'int4') {
+        return 'bigint';
+    }
+
+    if (dataType === 'text' || dataType === 'character varying' || dataType === 'varchar') {
+        return 'text';
+    }
+
+    throw new Error(`Unsupported sync_meta.id data type: ${dataType ?? 'unknown'}`);
+};
+
 const ensureFiniteMillis = (value: number, fieldName: string): number => {
     if (!Number.isFinite(value)) {
         throw new Error(`Expected ${fieldName} to be a finite millisecond timestamp but received ${value}`);
@@ -338,6 +392,8 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
             await client.query('BEGIN');
             await setRlsContext(client, userId);
 
+            const syncMetaIdType = await resolveSyncMetaIdType(client);
+
             const progressResult = await client.query(
                 `
                     SELECT last_version, last_meta_id, continuation_token
@@ -387,11 +443,61 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                 'Processing sync pull request'
             );
 
-            const applyContinuation =
-                decodedContinuation !== null && decodedContinuation.version >= effectiveSinceVersion;
+            let continuationForQuery: { version: number; id: string | number } | null = null;
+
+            if (decodedContinuation && decodedContinuation.version >= effectiveSinceVersion) {
+                const { version, id } = decodedContinuation;
+                if (syncMetaIdType === 'uuid') {
+                    if (UUID_REGEX.test(id)) {
+                        continuationForQuery = { version, id };
+                    } else {
+                        fastify.log.warn(
+                            {
+                                userId,
+                                requestedSinceVersion,
+                                continuationToken: continuationTokenToUse,
+                                decodedContinuation,
+                                syncMetaIdType,
+                            },
+                            'Continuation token id did not match UUID sync_meta.id schema; ignoring token.'
+                        );
+                    }
+                } else if (syncMetaIdType === 'bigint') {
+                    if (INTEGER_REGEX.test(id)) {
+                        try {
+                            const parsed = BigInt(id);
+                            continuationForQuery = { version, id: parsed.toString() };
+                        } catch (error) {
+                            fastify.log.warn(
+                                { userId, continuationToken: continuationTokenToUse, decodedContinuation, err: error },
+                                'Failed to parse bigint continuation token id; ignoring token.'
+                            );
+                        }
+                    } else {
+                        fastify.log.warn(
+                            {
+                                userId,
+                                requestedSinceVersion,
+                                continuationToken: continuationTokenToUse,
+                                decodedContinuation,
+                                syncMetaIdType,
+                            },
+                            'Continuation token id did not match numeric sync_meta.id schema; ignoring token.'
+                        );
+                    }
+                } else if (syncMetaIdType === 'text') {
+                    continuationForQuery = { version, id };
+                }
+
+                if (!continuationForQuery) {
+                    continuationTokenToUse = null;
+                }
+            }
+
+            const applyContinuation = continuationForQuery !== null;
 
             const comparisonVersion = applyContinuation
-                ? Math.max(effectiveSinceVersion, decodedContinuation!.version)
+                ? Math.max(effectiveSinceVersion, continuationForQuery!.version)
                 : effectiveSinceVersion;
 
             const params: unknown[] = [userId, comparisonVersion];
@@ -404,14 +510,15 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
             `;
 
             if (applyContinuation) {
+                const idCast = syncMetaIdType === 'uuid' ? '::uuid' : syncMetaIdType === 'bigint' ? '::bigint' : '';
                 sql = `
                     SELECT id, entity_id, entity_type, version, op, timestamp, payload
                     FROM sync_meta
-                    WHERE user_id = $1 AND (version > $2 OR (version = $3 AND id > $4))
+                    WHERE user_id = $1 AND (version > $2 OR (version = $3 AND id > $4${idCast}))
                     ORDER BY version ASC, id ASC
                     LIMIT $5;
                 `;
-                params.push(decodedContinuation!.version, decodedContinuation!.id, fetchLimit);
+                params.push(continuationForQuery!.version, continuationForQuery!.id, fetchLimit);
             } else {
                 params.push(fetchLimit);
             }
@@ -426,7 +533,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
 
             const baselineVersion = Math.max(
                 effectiveSinceVersion,
-                decodedContinuation?.version ?? effectiveSinceVersion
+                continuationForQuery?.version ?? effectiveSinceVersion
             );
             const highestVersion = ops.length > 0 ? ops[ops.length - 1].version : baselineVersion;
 
@@ -440,8 +547,8 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
 
             let lastMetaIdValue = metaRows.length > 0 ? toStringOrNull(metaRows[metaRows.length - 1].id) : null;
             if (lastMetaIdValue === null) {
-                if (applyContinuation && decodedContinuation) {
-                    lastMetaIdValue = decodedContinuation.id;
+                if (applyContinuation && continuationForQuery) {
+                    lastMetaIdValue = String(continuationForQuery.id);
                 } else {
                     lastMetaIdValue = storedLastMetaId ?? null;
                 }
