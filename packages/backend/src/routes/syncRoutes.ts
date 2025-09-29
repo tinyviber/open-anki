@@ -95,6 +95,22 @@ const toStringOrNull = (value: unknown): string | null => {
     return null;
 };
 
+const toMetaIdStringOrNull = (value: unknown): string | null => {
+    if (value === null || value === undefined) {
+        return null;
+    }
+    if (typeof value === 'number') {
+        return Number.isInteger(value) ? String(value) : null;
+    }
+    if (typeof value === 'bigint') {
+        return value.toString();
+    }
+    if (typeof value === 'string') {
+        return value;
+    }
+    return null;
+};
+
 const ensureFiniteMillis = (value: number, fieldName: string): number => {
     if (!Number.isFinite(value)) {
         throw new Error(`Expected ${fieldName} to be a finite millisecond timestamp but received ${value}`);
@@ -154,6 +170,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
 
                 const latestVersionRow = latestVersionResult.rows[0] as LatestVersionRow | undefined;
                 const latestVersion = toNumberOrNull(latestVersionRow?.latest_version) ?? 0;
+
 
                 const response: SessionResponse = {
                     userId,
@@ -350,13 +367,14 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
 
             const existingProgress = progressResult.rows[0] as DeviceProgressRow | undefined;
             const storedVersion = toNumberOrNull(existingProgress?.last_version) ?? 0;
-            const storedLastMetaId = toStringOrNull(existingProgress?.last_meta_id);
+            const storedLastMetaId = toMetaIdStringOrNull(existingProgress?.last_meta_id);
 
             const hasRequestedSince =
                 typeof requestedSinceVersion === 'number' && Number.isFinite(requestedSinceVersion);
             const effectiveSinceVersion = hasRequestedSince ? requestedSinceVersion! : storedVersion;
 
             let continuationTokenToUse = continuationToken ?? null;
+            let continuationMetaId: string | null = null;
             if (!continuationTokenToUse && !hasRequestedSince && existingProgress?.continuation_token) {
                 continuationTokenToUse = existingProgress.continuation_token;
             }
@@ -365,6 +383,7 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
             if (continuationTokenToUse) {
                 try {
                     decodedContinuation = decodeContinuationToken(continuationTokenToUse);
+                    continuationMetaId = toMetaIdStringOrNull(decodedContinuation.id);
                 } catch (error) {
                     fastify.log.warn(
                         { userId, requestedSinceVersion, continuationToken: continuationTokenToUse, err: error },
@@ -387,15 +406,12 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                 'Processing sync pull request'
             );
 
-            const applyContinuation =
-                decodedContinuation !== null && decodedContinuation.version >= effectiveSinceVersion;
+            const comparisonVersion = Math.max(
+                effectiveSinceVersion,
+                decodedContinuation?.version ?? effectiveSinceVersion
+            );
 
-            const comparisonVersion = applyContinuation
-                ? Math.max(effectiveSinceVersion, decodedContinuation!.version)
-                : effectiveSinceVersion;
-
-            const params: unknown[] = [userId, comparisonVersion];
-            let sql = `
+            const baseSql = `
                 SELECT id, entity_id, entity_type, version, op, timestamp, payload
                 FROM sync_meta
                 WHERE user_id = $1 AND version > $2
@@ -403,20 +419,47 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
                 LIMIT $3;
             `;
 
-            if (applyContinuation) {
-                sql = `
-                    SELECT id, entity_id, entity_type, version, op, timestamp, payload
-                    FROM sync_meta
-                    WHERE user_id = $1 AND (version > $2 OR (version = $3 AND id > $4))
-                    ORDER BY version ASC, id ASC
-                    LIMIT $5;
-                `;
-                params.push(decodedContinuation!.version, decodedContinuation!.id, fetchLimit);
+            const continuationSql = `
+                SELECT id, entity_id, entity_type, version, op, timestamp, payload
+                FROM sync_meta
+                WHERE user_id = $1 AND (version > $2 OR (version = $3 AND id > $4))
+                ORDER BY version ASC, id ASC
+                LIMIT $5;
+            `;
+
+            let metaResults;
+            let continuationApplied = false;
+            if (decodedContinuation && continuationMetaId) {
+                try {
+                    metaResults = await client.query(continuationSql, [
+                        userId,
+                        comparisonVersion,
+                        decodedContinuation.version,
+                        continuationMetaId,
+                        fetchLimit,
+                    ]);
+                    continuationApplied = true;
+                } catch (error) {
+                    if ((error as { code?: string }).code === '22P02') {
+                        fastify.log.warn(
+                            {
+                                userId,
+                                requestedSinceVersion,
+                                continuationToken: continuationTokenToUse,
+                                decodedId: decodedContinuation.id,
+                                err: error,
+                            },
+                            'Falling back to version-only pagination due to incompatible continuation meta id.'
+                        );
+                        metaResults = await client.query(baseSql, [userId, comparisonVersion, fetchLimit]);
+                    } else {
+                        throw error;
+                    }
+                }
             } else {
-                params.push(fetchLimit);
+                metaResults = await client.query(baseSql, [userId, comparisonVersion, fetchLimit]);
             }
 
-            const metaResults = await client.query(sql, params);
 
             const metaRowsRaw = metaResults.rows as SyncMetaRow[];
             const hasMore = metaRowsRaw.length > effectiveLimit;
@@ -430,18 +473,20 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
             );
             const highestVersion = ops.length > 0 ? ops[ops.length - 1].version : baselineVersion;
 
+            const nextTokenCandidate =
+                metaRows.length > 0 ? toMetaIdStringOrNull(metaRows[metaRows.length - 1].id) : null;
             const nextToken =
-                hasMore && metaRows.length > 0
+                hasMore && metaRows.length > 0 && nextTokenCandidate
                     ? encodeContinuationToken(
                           Number(metaRows[metaRows.length - 1].version),
-                          String(metaRows[metaRows.length - 1].id)
-                      )
+                          nextTokenCandidate
+                    )
                     : null;
 
-            let lastMetaIdValue = metaRows.length > 0 ? toStringOrNull(metaRows[metaRows.length - 1].id) : null;
+            let lastMetaIdValue = metaRows.length > 0 ? nextTokenCandidate : null;
             if (lastMetaIdValue === null) {
-                if (applyContinuation && decodedContinuation) {
-                    lastMetaIdValue = decodedContinuation.id;
+                if (continuationApplied) {
+                    lastMetaIdValue = continuationMetaId;
                 } else {
                     lastMetaIdValue = storedLastMetaId ?? null;
                 }
