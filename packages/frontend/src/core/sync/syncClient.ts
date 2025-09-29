@@ -22,6 +22,11 @@ const apiBaseUrl = (() => {
 
 const SYNC_BASE_URL = `${apiBaseUrl}/api/v1/sync`;
 
+export interface SyncAuthContext {
+  getAccessToken: () => Promise<string | null>;
+  requestReauthentication: () => void | Promise<void>;
+}
+
 export class SyncConflictError extends Error {
   constructor(
     message: string,
@@ -46,15 +51,43 @@ export interface SyncResult {
   lastSyncedAt: number | null;
 }
 
-export async function runSyncWorkflow(): Promise<SyncResult> {
+async function fetchWithAuth(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  auth: SyncAuthContext,
+): Promise<Response> {
+  const token = await auth.getAccessToken();
+  if (!token) {
+    await Promise.resolve(auth.requestReauthentication());
+    throw new SyncNetworkError('Authentication required.', 401);
+  }
+
+  const headers = new Headers(init?.headers ?? {});
+  headers.set('Authorization', `Bearer ${token}`);
+
+  const response = await fetch(input, {
+    ...init,
+    headers,
+    credentials: init?.credentials ?? 'include',
+  });
+
+  if (response.status === 401) {
+    await Promise.resolve(auth.requestReauthentication());
+    throw new SyncNetworkError('Authentication expired.', 401);
+  }
+
+  return response;
+}
+
+export async function runSyncWorkflow(auth: SyncAuthContext): Promise<SyncResult> {
   const state = await ensureSyncState();
-  const session = await fetchSession();
+  const session = await fetchSession(auth);
   state.latestServerVersion = Math.max(state.latestServerVersion, session.latestVersion);
 
-  const pushed = await pushPendingDeckOps(state);
+  const pushed = await pushPendingDeckOps(state, auth);
   let pulled = 0;
 
-  const pullOutcome = await pullRemoteOps(state);
+  const pullOutcome = await pullRemoteOps(state, auth);
   pulled = pullOutcome.pulled;
   state.lastPulledVersion = Math.max(state.lastPulledVersion, pullOutcome.latestVersion);
   state.latestServerVersion = Math.max(state.latestServerVersion, pullOutcome.latestVersion);
@@ -125,10 +158,12 @@ function generateDeviceId(): string {
   return `device-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
 }
 
-async function fetchSession(): Promise<SessionResponse> {
-  const response = await fetch(`${SYNC_BASE_URL}/session`, {
-    credentials: 'include',
-  });
+async function fetchSession(auth: SyncAuthContext): Promise<SessionResponse> {
+  const response = await fetchWithAuth(
+    `${SYNC_BASE_URL}/session`,
+    { credentials: 'include' },
+    auth,
+  );
 
   if (!response.ok) {
     throw new SyncNetworkError('Failed to establish sync session.', response.status);
@@ -138,7 +173,10 @@ async function fetchSession(): Promise<SessionResponse> {
   return body;
 }
 
-async function pushPendingDeckOps(state: SyncState): Promise<number> {
+async function pushPendingDeckOps(
+  state: SyncState,
+  auth: SyncAuthContext,
+): Promise<number> {
   const pending = await db.syncMeta.orderBy('id').toArray();
   if (pending.length === 0) {
     return 0;
@@ -165,12 +203,16 @@ async function pushPendingDeckOps(state: SyncState): Promise<number> {
     return 0;
   }
 
-  const response = await fetch(`${SYNC_BASE_URL}/push`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify({ deviceId: state.deviceId, ops }),
-  });
+  const response = await fetchWithAuth(
+    `${SYNC_BASE_URL}/push`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ deviceId: state.deviceId, ops }),
+    },
+    auth,
+  );
 
   if (!response.ok) {
     if (response.status === 409) {
@@ -251,6 +293,7 @@ function mapDeckToPayload(deck: Deck): DeckPayload {
 
 async function pullRemoteOps(
   state: SyncState,
+  auth: SyncAuthContext,
 ): Promise<{ pulled: number; latestVersion: number; continuationToken: string | null }> {
   let pulled = 0;
   let latestVersion = state.lastPulledVersion;
@@ -268,9 +311,11 @@ async function pullRemoteOps(
       params.set('continuationToken', continuationToken);
     }
 
-    const response = await fetch(`${SYNC_BASE_URL}/pull?${params.toString()}`, {
-      credentials: 'include',
-    });
+    const response = await fetchWithAuth(
+      `${SYNC_BASE_URL}/pull?${params.toString()}`,
+      { credentials: 'include' },
+      auth,
+    );
 
     if (!response.ok) {
       throw new SyncNetworkError('Failed to pull remote changes.', response.status);

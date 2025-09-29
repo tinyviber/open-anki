@@ -6,6 +6,7 @@ import {
   runSyncWorkflow,
   type SyncResult,
 } from '@/core/sync/syncClient';
+import { useAuth } from '@/hooks/useAuth';
 
 interface SyncContextValue {
   status: 'idle' | 'syncing' | 'error';
@@ -24,6 +25,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = React.useState<string | null>(null);
   const [conflicts, setConflicts] = React.useState<unknown>(null);
   const syncInFlight = React.useRef(false);
+  const { getAccessToken, requestReauthentication } = useAuth();
 
   React.useEffect(() => {
     let cancelled = false;
@@ -52,7 +54,10 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     setConflicts(null);
 
     try {
-      const result = await runSyncWorkflow();
+      const result = await runSyncWorkflow({
+        getAccessToken,
+        requestReauthentication,
+      });
       setLastSyncedAt(result.lastSyncedAt);
       setStatus('idle');
       return result;
@@ -61,7 +66,11 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
         setError(err.message);
         setConflicts(err.conflicts);
       } else if (err instanceof SyncNetworkError) {
-        setError('同步请求失败，请检查网络连接后重试。');
+        if (err.status === 401) {
+          setError('登录状态已过期，请重新登录。');
+        } else {
+          setError('同步请求失败，请检查网络连接后重试。');
+        }
         setConflicts(null);
       } else {
         setError(err instanceof Error ? err.message : '未知的同步错误。');
@@ -72,7 +81,7 @@ export function SyncProvider({ children }: { children: React.ReactNode }) {
     } finally {
       syncInFlight.current = false;
     }
-  }, []);
+  }, [getAccessToken, requestReauthentication]);
 
   React.useEffect(() => {
     void sync();
