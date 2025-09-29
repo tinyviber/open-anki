@@ -1,17 +1,8 @@
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '@/core/db/db'
 import { type DeckCardProps } from '@/components/DeckCard';
-import { type Card } from '@/core/db/db'; // Import Card interface for state check
+import { type Card } from '@/core/db/db';
 import { formatRelativeTime } from '@/lib/dateUtils';
-
-// Helper function to calculate a simple progress/difficulty score for MVP
-function calculateDifficulty(deckId: string): DeckCardProps['difficulty'] {
-  // Simple deterministic logic matching App.tsx mocks loosely
-  if (deckId === 'deck-1') return 'easy';
-  if (deckId === 'deck-2') return 'medium';
-  if (deckId === 'deck-3') return 'hard';
-  return 'medium';
-}
 
 export interface DeckSummary extends DeckCardProps {
     id: string; // Ensure ID is part of the output
@@ -50,26 +41,14 @@ export function useDeckSummaries(): DeckSummary[] | undefined {
       const cardIdsInDeck = allCardsInDeck.map(c => c.id);
       
       if (cardIdsInDeck.length > 0) {
-        // Find the latest ReviewLog whose cardId is in our deck
-        const latestDeckLog = await db.reviewLogs
-            .where('cardId') // Indexed field
-            .anyOf(cardIdsInDeck)
-            .reverse() // Sort by timestamp implicitly by finding the last item in a reverse query on primary key
-            .first(); 
-
-        // If no primary index defined, we rely on timestamp sort if it exists or use filter/sort
-        // Since reviewLogs is indexed '++id, cardId, timestamp', a reverse query on cardId filter
-        // will still require iteration/sorting for time.
-        
-        // Simpler implementation for MVP leveraging the secondary index and sorting:
         const mostRecentLog = await db.reviewLogs
-            .toCollection()
-            .filter(log => cardIdsInDeck.includes(log.cardId)) // Inefficient filter if cardIdsInDeck is huge
-            .sortBy('timestamp')
-            .then(logs => logs[logs.length - 1]); // Get the last one (highest timestamp)
+          .where('cardId')
+          .anyOf(cardIdsInDeck)
+          .sortBy('timestamp')
+          .then(logs => logs[logs.length - 1])
 
         if (mostRecentLog) {
-            lastStudiedTimestamp = mostRecentLog.timestamp;
+          lastStudiedTimestamp = mostRecentLog.timestamp
         }
       }
 

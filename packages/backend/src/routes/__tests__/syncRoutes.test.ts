@@ -19,8 +19,10 @@ describe('syncRoutes timestamp handling', () => {
     setTestPool(pool as any);
 
     await pool.query(`
+      CREATE SEQUENCE sync_meta_id_seq AS BIGINT;
+
       CREATE TABLE sync_meta (
-        id SERIAL PRIMARY KEY,
+        id TEXT PRIMARY KEY DEFAULT ('meta-' || nextval('sync_meta_id_seq')::TEXT),
         user_id TEXT NOT NULL,
         entity_id TEXT NOT NULL,
         entity_type TEXT NOT NULL,
@@ -39,7 +41,7 @@ describe('syncRoutes timestamp handling', () => {
         user_id TEXT NOT NULL,
         device_id TEXT NOT NULL,
         last_version BIGINT NOT NULL DEFAULT 0,
-        last_meta_id BIGINT,
+        last_meta_id TEXT,
         continuation_token TEXT,
         updated_at TIMESTAMPTZ DEFAULT NOW(),
         PRIMARY KEY (user_id, device_id)
@@ -326,7 +328,7 @@ describe('syncRoutes timestamp handling', () => {
           INSERT INTO sync_meta (user_id, entity_id, entity_type, version, op, timestamp, payload, device_id, diff)
           VALUES ($1, $2, 'deck', $3, 'create', $4, $5, $6, NULL);
         `,
-        [TEST_USER_ID, entityId, 1, timestamp, payload, 'seed-device']
+        [TEST_USER_ID, entityId, i + 1, timestamp, payload, 'seed-device']
       );
     }
 
@@ -372,7 +374,7 @@ describe('syncRoutes timestamp handling', () => {
     expect(collectedOps.map((op: any) => op.entityId)).toEqual(expectedIds);
     const uniqueKeys = new Set(collectedOps.map((op: any) => `${op.entityId}:${op.version}`));
     expect(uniqueKeys.size).toBe(totalOps);
-    expect(collectedOps[collectedOps.length - 1].version).toBe(1);
+    expect(collectedOps[collectedOps.length - 1].version).toBe(totalOps);
   });
 
   it('returns 409 conflicts for stale versions and leaves state untouched', async () => {
@@ -518,6 +520,47 @@ describe('syncRoutes timestamp handling', () => {
     expect(secondPullBody.hasMore).toBe(false);
     expect(secondPullBody.continuationToken).toBeNull();
     expect(secondPullBody.newVersion).toBe(totalOps);
+  });
+
+  it('supports UUID continuation tokens without throwing', async () => {
+    const uuidIds = [
+      '11111111-1111-1111-1111-111111111111',
+      '22222222-2222-2222-2222-222222222222',
+    ];
+
+    await pool.query(
+      `
+        INSERT INTO sync_meta (id, user_id, entity_id, entity_type, version, op, timestamp, payload, device_id, diff)
+        VALUES ($1, $2, $3, 'deck', 1, 'create', NOW(), $4, 'uuid-device', NULL),
+               ($5, $2, $6, 'deck', 2, 'create', NOW(), $7, 'uuid-device', NULL);
+      `,
+      [
+        uuidIds[0],
+        TEST_USER_ID,
+        'deck-uuid-1',
+        { name: 'UUID Deck 1', description: null, config: {} },
+        uuidIds[1],
+        'deck-uuid-2',
+        { name: 'UUID Deck 2', description: null, config: {} },
+      ],
+    );
+
+    const firstResponse = await fetch(`${baseUrl}/pull?limit=1`);
+    expect(firstResponse.status).toBe(200);
+    const firstBody = await firstResponse.json();
+    expect(firstBody.ops).toHaveLength(1);
+    expect(firstBody.hasMore).toBe(true);
+    expect(firstBody.continuationToken).toBe(`1:${uuidIds[0]}`);
+
+    const secondResponse = await fetch(
+      `${baseUrl}/pull?limit=1&continuationToken=${encodeURIComponent(firstBody.continuationToken)}`,
+    );
+    expect(secondResponse.status).toBe(200);
+    const secondBody = await secondResponse.json();
+    expect(secondBody.ops).toHaveLength(1);
+    expect(secondBody.ops[0].entityId).toBe('deck-uuid-2');
+    expect(secondBody.hasMore).toBe(false);
+    expect(secondBody.continuationToken).toBeNull();
   });
 
   it('returns session metadata including latest version and default pull limit', async () => {

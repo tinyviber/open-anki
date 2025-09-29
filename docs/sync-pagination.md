@@ -27,7 +27,7 @@ so pagination is deterministic.
 | `sinceVersion` | integer | stored device progress | Starting version (exclusive). If omitted the server reuses the persisted `last_version` for the requesting device. |
 | `limit` | positive integer | `DEFAULT_PULL_LIMIT` (100) | Maximum number of ops to return. The server fetches one extra row to determine `hasMore`. |
 | `deviceId` | string | `DEFAULT_PULL_DEVICE_ID` (`"unknown-device"`) | Used to track per-device progress (`last_version`, `last_meta_id`, and saved continuation tokens). |
-| `continuationToken` | string | none | Resume pagination after a partial page. Must match the `version:id` format produced by the server. |
+| `continuationToken` | string | none | Resume pagination after a partial page. Must match the `version:id` format produced by the server (the identifier segment may be a UUID). |
 
 ### Interactions between parameters
 
@@ -41,7 +41,7 @@ so pagination is deterministic.
 
 ## Continuation semantics
 
-- Continuation tokens encode the last returned row as `"<version>:<metaId>"`.
+- Continuation tokens encode the last returned row as `"<version>:<metaId>"`, where `<metaId>` is the literal identifier from `sync_meta` (for example a UUID).
 - When `hasMore` is `true`, clients **must** include the returned token on their
   subsequent `/pull` request to fetch the next page.
 - The token remains persisted in `device_sync_progress` so a client can resume

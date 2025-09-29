@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import jwt from 'jsonwebtoken';
 import { newDb } from 'pg-mem';
+import { decodeContinuationToken } from '../../../shared/src/sync.js';
 import { setTestPool } from '../db/pg-service.js';
 
 const TEST_JWT_SECRET = 'test-secret';
@@ -10,16 +11,6 @@ const TEST_USER_ID = '11111111-1111-1111-1111-111111111111';
 const TEST_DEVICE_ID = 'test-device';
 
 const signToken = () => jwt.sign({ sub: TEST_USER_ID }, TEST_JWT_SECRET);
-
-const decodeContinuationToken = (token: string) => {
-  const [versionPart, idPart] = token.split(':');
-  const version = Number.parseInt(versionPart, 10);
-  const id = Number.parseInt(idPart, 10);
-  if (!Number.isInteger(version) || !Number.isInteger(id)) {
-    throw new Error(`Invalid continuation token: ${token}`);
-  }
-  return { version, id };
-};
 
 describe('syncRoutes /pull progress tracking', () => {
   let app: FastifyInstance;
@@ -53,7 +44,7 @@ describe('syncRoutes /pull progress tracking', () => {
         user_id UUID NOT NULL,
         device_id TEXT NOT NULL,
         last_version BIGINT NOT NULL DEFAULT 0,
-        last_meta_id BIGINT,
+        last_meta_id TEXT,
         continuation_token TEXT,
         updated_at TIMESTAMPTZ DEFAULT NOW(),
         PRIMARY KEY (user_id, device_id)
@@ -166,7 +157,7 @@ describe('syncRoutes /pull progress tracking', () => {
     expect(storedProgress.rows[0].continuation_token).toBe(firstBody.continuationToken);
 
     const decoded = decodeContinuationToken(firstBody.continuationToken);
-    expect(Number(storedProgress.rows[0].last_meta_id)).toBe(decoded.id);
+    expect(storedProgress.rows[0].last_meta_id).toBe(decoded.id);
 
     const secondResponse = await fetch(
       `${baseUrl}/api/v1/sync/pull?deviceId=${TEST_DEVICE_ID}&limit=1`,

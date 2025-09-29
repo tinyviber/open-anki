@@ -130,7 +130,17 @@ export const DEFAULT_PULL_DEVICE_ID = 'unknown-device';
 
 export const continuationTokenSchema = z
   .string()
-  .regex(/^[0-9]+:[0-9]+$/, 'Continuation tokens must be in the form "version:id".');
+  .refine(token => {
+    const parts = token.split(':');
+    if (parts.length !== 2) {
+      return false;
+    }
+    const [versionPart, idPart] = parts;
+    if (!/^[0-9]+$/.test(versionPart)) {
+      return false;
+    }
+    return idPart.length > 0;
+  }, 'Continuation tokens must be in the form "version:id" with a non-empty identifier.');
 
 export type ContinuationToken = z.infer<typeof continuationTokenSchema>;
 
@@ -172,25 +182,27 @@ export const sessionResponseSchema = z.object({
 
 export type SessionResponse = z.infer<typeof sessionResponseSchema>;
 
-export function encodeContinuationToken(version: number, id: number): ContinuationToken {
+export function encodeContinuationToken(version: number, id: string): ContinuationToken {
   if (!Number.isInteger(version) || version < 0) {
     throw new Error(`Invalid version for continuation token: ${version}`);
   }
-  if (!Number.isInteger(id) || id < 0) {
-    throw new Error(`Invalid id for continuation token: ${id}`);
+  if (typeof id !== 'string' || id.length === 0) {
+    throw new Error('Continuation token id must be a non-empty string.');
+  }
+  if (id.includes(':')) {
+    throw new Error('Continuation token id cannot contain colon characters.');
   }
   return `${version}:${id}`;
 }
 
-export function decodeContinuationToken(token: ContinuationToken): { version: number; id: number } {
+export function decodeContinuationToken(token: ContinuationToken): { version: number; id: string } {
   const [versionPart, idPart] = token.split(':');
   const version = Number.parseInt(versionPart, 10);
-  const id = Number.parseInt(idPart, 10);
   if (!Number.isInteger(version) || version < 0) {
     throw new Error(`Invalid version component in continuation token: ${token}`);
   }
-  if (!Number.isInteger(id) || id < 0) {
+  if (typeof idPart !== 'string' || idPart.length === 0) {
     throw new Error(`Invalid id component in continuation token: ${token}`);
   }
-  return { version, id };
+  return { version, id: idPart };
 }
