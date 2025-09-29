@@ -2,6 +2,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '@/core/db/db'
 import { type DeckCardProps } from '@/components/DeckCard';
 import { type Card } from '@/core/db/db'; // Import Card interface for state check
+import { formatRelativeTime } from '@/lib/dateUtils';
 
 // Helper function to calculate a simple progress/difficulty score for MVP
 function calculateDifficulty(deckId: string): DeckCardProps['difficulty'] {
@@ -10,19 +11,6 @@ function calculateDifficulty(deckId: string): DeckCardProps['difficulty'] {
   if (deckId === 'deck-2') return 'medium';
   if (deckId === 'deck-3') return 'hard';
   return 'medium';
-}
-
-function formatRelativeTime(timestamp: number | undefined): string | undefined {
-  if (!timestamp || timestamp === 0) return undefined;
-  // Placeholder implementation for relative time
-  const diff = Date.now() - timestamp;
-  const hours = Math.round(diff / 3600000);
-  
-  if (diff < 60000) return `刚刚`;
-  if (hours < 1) return `${Math.max(1, Math.round(diff / 60000))}分钟前`;
-  if (hours < 24) return `${hours}小时前`;
-  if (hours < 24 * 7) return `${Math.round(hours / 24)}天前`;
-  return "超过一周前";
 }
 
 export interface DeckSummary extends DeckCardProps {
