@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORKSPACE_FILTER="packages/backend"
+WORKSPACE_FILTER="open-anki-sync-service"
 
 if ! command -v bun >/dev/null 2>&1; then
   echo "[run-backend-tests] bun 未安装，请先安装 Bun 再运行此脚本。" >&2
