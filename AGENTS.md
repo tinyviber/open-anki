@@ -5,5 +5,5 @@
 - Added deck synchronization pipeline, statistics enhancements, and supporting hooks/pages for deck details and study history.
 
 ## Resources
-- See `docs/TODO.md` for remaining work items and guidance on testing scripts.
+- See `docs` .
 
