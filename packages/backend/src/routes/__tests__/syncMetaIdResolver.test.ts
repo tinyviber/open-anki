@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import type { QueryClient } from '../../db/pg-service.js';
+import type { QueryClient } from '../../db/database.js';
 import { __internal } from '../syncRoutes.js';
 
 const { resolveSyncMetaIdType } = __internal;

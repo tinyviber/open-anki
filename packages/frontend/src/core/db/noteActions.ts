@@ -1,5 +1,11 @@
 import { db, type Note, type Card } from './db';
-import { generateGUID } from '@/lib/guidUtils'; // 引入新的工具函数
+import { generateGUID } from '@/lib/guidUtils';
+import {
+  mapNoteToPayload,
+  mapCardToPayload,
+  cardStateToCardType,
+  cardStateToQueue,
+} from '@/core/sync/payloadMappers';
 
 const DEFAULT_NOTE_TYPE_ID = "1-basic"; 
 
@@ -34,12 +40,15 @@ export async function createNoteAndCards({
   }
 
   const now = Date.now();
+  const noteModelName = noteType?.name ?? 'Basic';
   const newNote: Note = {
     id: generateGUID(),
     noteTypeId: noteTypeId,
-    fields: fields,
-    tags: tags,
-    guid: generateGUID(), // Sync GUID
+    deckId,
+    modelName: noteModelName,
+    fields: { ...fields },
+    tags: [...tags],
+    guid: generateGUID(),
   };
 
   // MVP: 为 NoteType 的每个模板创建一张卡片。
@@ -49,21 +58,45 @@ export async function createNoteAndCards({
       noteId: newNote.id,
       deckId: deckId,
       templateIndex: index,
-      state: 'new' as Card['state'], // 总是从 'new' 状态开始
-      due: now, // 立即到期，等待下次学习会话
-      ivl: 0, 
-      ease: 2.5, 
+      state: 'new' as Card['state'],
+      due: now,
+      ivl: 0,
+      ease: 2.5,
+      reps: 0,
+      lapses: 0,
+      cardType: cardStateToCardType('new'),
+      queue: cardStateToQueue('new'),
+      originalDue: null,
     };
   });
-  
 
-  await db.transaction('rw', db.notes, db.cards, async () => {
+
+  await db.transaction('rw', db.notes, db.cards, db.syncMeta, async () => {
     // 1. Add the Note
     await db.notes.add(newNote);
 
     // 2. Add the derived Cards
     if (newCards.length > 0) {
         await db.cards.bulkAdd(newCards);
+    }
+
+    const timestamp = Date.now();
+    await db.syncMeta.add({
+      entityId: newNote.id,
+      entityType: 'note',
+      op: 'create',
+      timestamp,
+      payload: mapNoteToPayload(newNote),
+    });
+
+    for (const card of newCards) {
+      await db.syncMeta.add({
+        entityId: card.id,
+        entityType: 'card',
+        op: 'create',
+        timestamp,
+        payload: mapCardToPayload(card),
+      });
     }
   });
 

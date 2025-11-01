@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'bun:test';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { syncRoutes } from '../syncRoutes.js';
-import { setTestPool } from '../../db/pg-service.js';
+import { setTestPool } from '../../db/database.js';
 
 const TEST_USER_ID = '00000000-0000-0000-0000-000000000001';
 

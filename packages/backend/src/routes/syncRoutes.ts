@@ -27,7 +27,7 @@ import {
     decodeContinuationToken,
     encodeContinuationToken,
 } from '../../../shared/src/sync.js';
-import { getQueryClient, type QueryClient } from '../db/pg-service.js';
+import { getDatabaseProvider, getQueryClient, type QueryClient } from '../db/database.js';
 
 type EntityType = SyncOp['entityType'];
 type OperationType = SyncOp['op'];
@@ -93,6 +93,20 @@ const toStringOrNull = (value: unknown): string | null => {
         return String(value);
     }
     return null;
+};
+
+const parseMaybeJson = <T>(value: unknown): T | null => {
+    if (value === null || value === undefined) {
+        return null;
+    }
+    if (typeof value === 'string') {
+        try {
+            return JSON.parse(value) as T;
+        } catch {
+            return null;
+        }
+    }
+    return value as T;
 };
 
 const UUID_REGEX =
@@ -280,6 +294,9 @@ const toRequiredNumber = (value: unknown, fieldName: string): number => {
 };
 
 const setRlsContext = async (client: QueryClient, userId: string) => {
+    if (getDatabaseProvider() !== 'postgres') {
+        return;
+    }
     await client.query(`SELECT set_config('request.jwt.claim.sub', $1, true);`, [userId]);
     await client.query(`SELECT set_config('request.jwt.claim.role', $1, true);`, ['authenticated']);
 };
@@ -699,13 +716,13 @@ export const syncRoutes: FastifyPluginAsync = async (fastify, _opts) => {
             await client.query(
                 `
                     INSERT INTO device_sync_progress (user_id, device_id, last_version, last_meta_id, continuation_token, updated_at)
-                    VALUES ($1, $2, $3, $4, $5, NOW())
+                    VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
                     ON CONFLICT (user_id, device_id)
                     DO UPDATE SET
                         last_version = EXCLUDED.last_version,
                         last_meta_id = EXCLUDED.last_meta_id,
                         continuation_token = EXCLUDED.continuation_token,
-                        updated_at = NOW();
+                        updated_at = CURRENT_TIMESTAMP;
                 `,
                 [userId, effectiveDeviceId, highestVersion, lastMetaIdColumnValue, nextToken]
             );
@@ -761,7 +778,7 @@ async function handleDeckOperation(client: QueryClient, userId: string, op: Deck
         const payload = op.payload;
         const updateQuery = `
             UPDATE decks
-            SET name = $1, description = $2, config = $3, updated_at = NOW()
+            SET name = $1, description = $2, config = $3, updated_at = CURRENT_TIMESTAMP
             WHERE id = $4 AND user_id = $5;
         `;
         await client.query(updateQuery, [
@@ -800,7 +817,7 @@ async function handleNoteOperation(client: QueryClient, userId: string, op: Note
         const payload = op.payload;
         const updateQuery = `
             UPDATE notes
-            SET deck_id = $1, model_name = $2, fields = $3, tags = $4, updated_at = NOW()
+            SET deck_id = $1, model_name = $2, fields = $3, tags = $4, updated_at = CURRENT_TIMESTAMP
             WHERE id = $5 AND user_id = $6;
         `;
         await client.query(updateQuery, [
@@ -851,7 +868,7 @@ async function handleCardOperation(client: QueryClient, userId: string, op: Card
         const updateQuery = `
             UPDATE cards
             SET note_id = $1, ordinal = $2, due = $3, interval = $4, ease_factor = $5,
-                reps = $6, lapses = $7, card_type = $8, queue = $9, original_due = $10, updated_at = NOW()
+                reps = $6, lapses = $7, card_type = $8, queue = $9, original_due = $10, updated_at = CURRENT_TIMESTAMP
             WHERE id = $11 AND user_id = $12;
         `;
         const dueMillis = toRequiredNumber(payload.due, 'card.due');
@@ -1148,11 +1165,9 @@ function toMillis(value: Date | string | number): number {
 }
 
 function resolvePayload<T>(payload: T | null, row: SyncMetaRow, schema: ZodType<T>): T {
-    if (payload) {
-        return schema.parse(payload);
-    }
-    if (row.payload != null) {
-        return schema.parse(row.payload);
+    const candidate = payload ?? parseMaybeJson<T>(row.payload) ?? (row.payload as T | null);
+    if (candidate) {
+        return schema.parse(candidate);
     }
     throw new Error(`Missing payload for ${row.entity_type} ${row.entity_id} (${row.op})`);
 }

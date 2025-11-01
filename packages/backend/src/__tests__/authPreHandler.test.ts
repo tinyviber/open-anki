@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import type { FastifyInstance } from 'fastify';
-import { setTestPool } from '../db/pg-service.js';
+import { setTestPool } from '../db/database.js';
 
 let buildApp: typeof import('../index.js')['buildApp'];
 

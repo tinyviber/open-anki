@@ -4,7 +4,7 @@ import type { Pool } from 'pg';
 import jwt from 'jsonwebtoken';
 import { newDb } from 'pg-mem';
 import { decodeContinuationToken } from '../../../shared/src/sync.js';
-import { setTestPool } from '../db/pg-service.js';
+import { setTestPool } from '../db/database.js';
 
 const TEST_JWT_SECRET = 'test-secret';
 const TEST_USER_ID = '11111111-1111-1111-1111-111111111111';

@@ -4,7 +4,7 @@ import { newDb } from 'pg-mem';
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { syncRoutes } from '../syncRoutes.js';
-import { setTestPool } from '../../db/pg-service.js';
+import { setTestPool } from '../../db/database.js';
 
 const TEST_USER_ID = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
 const TEST_DEVICE_ID = 'progress-bigint-device';

@@ -1,11 +1,6 @@
-import { type ReactNode } from 'react';
-import { Header } from '@/components/Header';
-import { Sidebar } from '@/components/Sidebar';
-import { Outlet } from 'react-router-dom';
-
-interface LayoutWrapperProps {
-  children?: ReactNode; // Removed children type since react-router Outlet is used. Using Outlet
-}
+import { Header } from '@/components/Header'
+import { Sidebar } from '@/components/Sidebar'
+import { Outlet } from 'react-router-dom'
 
 // 统一的页面布局，包含 Header 和 Sidebar
 export function LayoutWrapper() {

@@ -10,3 +10,4 @@ dist/
 # Turborepo cache
 .turbo/
 packages/*/.turbo/
+packages/backend/.data/

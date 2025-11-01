@@ -1,7 +1,8 @@
 import * as React from 'react';
+import React from 'react';
 import { ChevronLeft, ChevronsRight, HeartCrack, Lightbulb } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
