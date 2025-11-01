@@ -11,6 +11,19 @@ introducing the bundled production build.
 - Provision a database. The backend auto-detects Supabase CLI environments, so
   starting Supabase locally with `supabase start` is the easiest option. You can
   alternatively export `DATABASE_URL` when connecting to a remote Postgres.
+  When you prefer an embedded database during development, set
+  `DB_PROVIDER=sqlite` (optionally `SQLITE_DB_PATH=/path/to/dev.sqlite`) before
+  starting the service. The server will create the SQLite database on demand and
+  keep the SQL schema compatible with the Supabase version. Running in a Node.js
+  environment requires installing the native `better-sqlite3` dependency; under
+  Bun the built-in `bun:sqlite` driver is used automatically.
+- A lightweight Dev Container is available via `.devcontainer/devcontainer.json`.
+  The default configuration skips Supabase to keep the image slim. To opt into
+  Supabase tooling set `SUPABASE_INSTALL=true` (and optionally
+  `SUPABASE_AUTOSTART=true`) in your personal devcontainer configuration before
+  rebuilding the environment. When enabled the Supabase CLI will be installed
+  during the post-create hook and the bootstrap script will be executed on
+  container start.
 - Apply database migrations and seed fixtures with
   `bunx turbo run migrate --filter=packages/backend` followed by
   `bunx turbo run seed --filter=packages/backend`. The helper task

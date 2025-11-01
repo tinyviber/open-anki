@@ -1,16 +1,32 @@
 import {
   DEFAULT_PULL_LIMIT,
+  type CardPayload,
   type DeckPayload,
+  type NotePayload,
   type PullResponse,
+  type ReviewLogPayload,
   type SessionResponse,
   type SyncOp,
+  cardPayloadSchema,
   deckPayloadSchema,
+  notePayloadSchema,
+  reviewLogPayloadSchema,
 } from '../../../../shared/src/sync.js';
 import { db } from '../db/db';
-import type { Deck, SyncMeta, SyncState } from '../../../../shared/src/index.js';
+import type { Card, Deck, Note, ReviewLog, SyncMeta, SyncState } from '../../../../shared/src/index.js';
+import {
+  cardStateToCardType,
+  cardStateToQueue,
+  deriveCardStateFromQueue,
+  mapCardToPayload,
+  mapDeckToPayload,
+  mapNoteToPayload,
+  mapReviewLogToPayload,
+} from './payloadMappers';
 
 const SYNC_STATE_ID = 'singleton';
 const DEVICE_ID_STORAGE_KEY = 'open-anki:deviceId';
+const DEFAULT_NOTE_TYPE_ID = '1-basic';
 
 const apiBaseUrl = (() => {
   const raw = import.meta.env?.VITE_API_BASE_URL ?? '';
@@ -84,7 +100,7 @@ export async function runSyncWorkflow(auth: SyncAuthContext): Promise<SyncResult
   const session = await fetchSession(auth);
   state.latestServerVersion = Math.max(state.latestServerVersion, session.latestVersion);
 
-  const pushed = await pushPendingDeckOps(state, auth);
+  const pushed = await pushPendingOps(state, auth);
   let pulled = 0;
 
   const pullOutcome = await pullRemoteOps(state, auth);
@@ -186,7 +202,7 @@ async function fetchSession(auth: SyncAuthContext): Promise<SessionResponse> {
 }
 
 
-async function pushPendingDeckOps(
+async function pushPendingOps(
   state: SyncState,
   auth: SyncAuthContext,
 ): Promise<number> {
@@ -200,15 +216,18 @@ async function pushPendingDeckOps(
   const processedIds: number[] = [];
 
   for (const entry of pending) {
-    if (entry.entityType !== 'deck') {
-      continue;
-    }
-
-    const syncOp = await buildDeckSyncOp(entry, nextVersion);
-    ops.push(syncOp);
-    nextVersion += 1;
-    if (typeof entry.id === 'number') {
-      processedIds.push(entry.id);
+    try {
+      const syncOp = await buildSyncOp(entry, nextVersion);
+      if (!syncOp) {
+        continue;
+      }
+      ops.push(syncOp);
+      nextVersion += 1;
+      if (typeof entry.id === 'number') {
+        processedIds.push(entry.id);
+      }
+    } catch (error) {
+      console.warn('Skipping sync meta entry due to unresolved payload', entry, error);
     }
   }
 
@@ -249,34 +268,83 @@ async function pushPendingDeckOps(
   return ops.length;
 }
 
-async function buildDeckSyncOp(entry: SyncMeta, version: number): Promise<SyncOp> {
+async function buildSyncOp(entry: SyncMeta, version: number): Promise<SyncOp | null> {
   const base: Omit<SyncOp, 'entityType' | 'op' | 'version'> = {
     entityId: entry.entityId,
     timestamp: entry.timestamp,
     diff: entry.diff,
   } as const;
 
-  if (entry.op === 'delete') {
-    return {
-      ...base,
-      entityType: 'deck',
-      op: 'delete',
-      version,
-    };
-  }
-
-  const payload = await resolveDeckPayload(entry.entityId, entry.payload);
-  deckPayloadSchema.parse(payload);
-
   const opType = entry.op === 'update' ? 'update' : 'create';
 
-  return {
-    ...base,
-    entityType: 'deck',
-    op: opType,
-    version,
-    payload,
-  };
+  switch (entry.entityType) {
+    case 'deck':
+      if (entry.op === 'delete') {
+        return {
+          ...base,
+          entityType: 'deck',
+          op: 'delete',
+          version,
+        };
+      }
+      return {
+        ...base,
+        entityType: 'deck',
+        op: opType,
+        version,
+        payload: await resolveDeckPayload(entry.entityId, entry.payload),
+      } satisfies Extract<SyncOp, { entityType: 'deck' }>;
+    case 'note':
+      if (entry.op === 'delete') {
+        return {
+          ...base,
+          entityType: 'note',
+          op: 'delete',
+          version,
+        };
+      }
+      return {
+        ...base,
+        entityType: 'note',
+        op: opType,
+        version,
+        payload: await resolveNotePayload(entry.entityId, entry.payload),
+      } satisfies Extract<SyncOp, { entityType: 'note' }>;
+    case 'card':
+      if (entry.op === 'delete') {
+        return {
+          ...base,
+          entityType: 'card',
+          op: 'delete',
+          version,
+        };
+      }
+      return {
+        ...base,
+        entityType: 'card',
+        op: opType,
+        version,
+        payload: await resolveCardPayload(entry.entityId, entry.payload),
+      } satisfies Extract<SyncOp, { entityType: 'card' }>;
+    case 'review_log':
+      if (entry.op === 'delete') {
+        return {
+          ...base,
+          entityType: 'review_log',
+          op: 'delete',
+          version,
+        };
+      }
+      return {
+        ...base,
+        entityType: 'review_log',
+        op: opType,
+        version,
+        payload: await resolveReviewLogPayload(entry.entityId, entry.payload),
+      } satisfies Extract<SyncOp, { entityType: 'review_log' }>;
+    default:
+      return null;
+  }
 }
 
 async function resolveDeckPayload(entityId: string, payload: SyncMeta['payload']): Promise<DeckPayload> {
@@ -289,20 +357,49 @@ async function resolveDeckPayload(entityId: string, payload: SyncMeta['payload']
     throw new Error(`Unable to resolve deck ${entityId} for sync payload`);
   }
 
-  return mapDeckToPayload(deck);
+  return mapDeckToPayload(deck as Deck);
 }
 
-function mapDeckToPayload(deck: Deck): DeckPayload {
-  const description = deck.config?.description ?? null;
-  const config: DeckPayload['config'] = { ...deck.config };
-  if (description === null) {
-    delete (config as Record<string, unknown>).description;
+async function resolveNotePayload(entityId: string, payload: SyncMeta['payload']): Promise<NotePayload> {
+  if (payload) {
+    return notePayloadSchema.parse(payload);
   }
-  return {
-    name: deck.name,
-    description,
-    config,
-  };
+
+  const note = await db.notes.get(entityId);
+  if (!note) {
+    throw new Error(`Unable to resolve note ${entityId} for sync payload`);
+  }
+
+  return mapNoteToPayload(note as Note);
+}
+
+async function resolveCardPayload(entityId: string, payload: SyncMeta['payload']): Promise<CardPayload> {
+  if (payload) {
+    return cardPayloadSchema.parse(payload);
+  }
+
+  const card = await db.cards.get(entityId);
+  if (!card) {
+    throw new Error(`Unable to resolve card ${entityId} for sync payload`);
+  }
+
+  return mapCardToPayload(card as Card);
+}
+
+async function resolveReviewLogPayload(
+  entityId: string,
+  payload: SyncMeta['payload'],
+): Promise<ReviewLogPayload> {
+  if (payload) {
+    return reviewLogPayloadSchema.parse(payload);
+  }
+
+  const reviewLog = await db.reviewLogs.get(entityId);
+  if (!reviewLog) {
+    throw new Error(`Unable to resolve review log ${entityId} for sync payload`);
+  }
+
+  return mapReviewLogToPayload(reviewLog as ReviewLog);
 }
 
 async function pullRemoteOps(
@@ -356,12 +453,22 @@ async function pullRemoteOps(
 }
 
 async function applyServerOp(op: SyncOp): Promise<void> {
-  if (op.entityType === 'deck') {
-    await applyDeckOp(op);
-    return;
+  switch (op.entityType) {
+    case 'deck':
+      await applyDeckOp(op);
+      return;
+    case 'note':
+      await applyNoteOp(op);
+      return;
+    case 'card':
+      await applyCardOp(op);
+      return;
+    case 'review_log':
+      await applyReviewLogOp(op);
+      return;
+    default:
+      console.warn('Skipping unsupported sync entity type', op.entityType);
   }
-
-  console.warn('Skipping unsupported sync entity type', op.entityType);
 }
 
 async function applyDeckOp(op: Extract<SyncOp, { entityType: 'deck' }>): Promise<void> {
@@ -414,6 +521,113 @@ async function applyDeckOp(op: Extract<SyncOp, { entityType: 'deck' }>): Promise
   await db.decks.put(nextDeck);
 }
 
+async function applyNoteOp(op: Extract<SyncOp, { entityType: 'note' }>): Promise<void> {
+  if (op.op === 'delete') {
+    await db.transaction('rw', db.notes, db.cards, db.reviewLogs, async () => {
+      const cardIds = await db.cards.where('noteId').equals(op.entityId).primaryKeys();
+      if (cardIds.length > 0) {
+        await db.reviewLogs.where('cardId').anyOf(cardIds).delete();
+        await db.cards.bulkDelete(cardIds);
+      }
+      await db.notes.delete(op.entityId);
+    });
+    return;
+  }
+
+  const payload = op.payload;
+  if (!payload) {
+    throw new Error(`Missing payload for note operation ${op.entityId}`);
+  }
+
+  const normalizedFields: Record<string, string> = {};
+  for (const [key, value] of Object.entries(payload.fields ?? {})) {
+    normalizedFields[key] = typeof value === 'string' ? value : value != null ? String(value) : '';
+  }
+
+  await db.transaction('rw', db.notes, async () => {
+    const existing = await db.notes.get(op.entityId);
+    const note: Note = {
+      id: op.entityId,
+      noteTypeId: existing?.noteTypeId ?? resolveNoteTypeId(payload.model_name),
+      deckId: payload.deck_id,
+      modelName: payload.model_name,
+      fields: normalizedFields,
+      tags: payload.tags ?? [],
+      guid: existing?.guid ?? op.entityId,
+    };
+    await db.notes.put(note);
+  });
+}
+
+async function applyCardOp(op: Extract<SyncOp, { entityType: 'card' }>): Promise<void> {
+  if (op.op === 'delete') {
+    await db.transaction('rw', db.cards, db.reviewLogs, async () => {
+      await db.reviewLogs.where('cardId').equals(op.entityId).delete();
+      await db.cards.delete(op.entityId);
+    });
+    return;
+  }
+
+  const payload = op.payload;
+  if (!payload) {
+    throw new Error(`Missing payload for card operation ${op.entityId}`);
+  }
+
+  await db.transaction('rw', db.cards, db.notes, async () => {
+    const existing = await db.cards.get(op.entityId);
+    const relatedNote = await db.notes.get(payload.note_id);
+    const fallbackState: Card['state'] = existing?.state ?? 'learning';
+    const state = deriveCardStateFromQueue(payload.queue, payload.card_type, fallbackState);
+
+    const deckId = existing?.deckId ?? relatedNote?.deckId ?? 'unknown-deck';
+    const due = typeof payload.due === 'number' && Number.isFinite(payload.due)
+      ? payload.due
+      : existing?.due ?? Date.now();
+
+    const nextCard: Card = {
+      id: op.entityId,
+      noteId: payload.note_id,
+      deckId,
+      templateIndex: payload.ordinal ?? existing?.templateIndex ?? 0,
+      state,
+      due,
+      ivl: payload.interval ?? existing?.ivl ?? 0,
+      ease: payload.ease_factor ?? existing?.ease ?? 2.5,
+      reps: payload.reps ?? existing?.reps ?? 0,
+      lapses: payload.lapses ?? existing?.lapses ?? 0,
+      cardType: payload.card_type ?? cardStateToCardType(state),
+      queue: payload.queue ?? cardStateToQueue(state),
+      originalDue: payload.original_due ?? existing?.originalDue ?? null,
+    };
+
+    await db.cards.put(nextCard);
+  });
+}
+
+async function applyReviewLogOp(op: Extract<SyncOp, { entityType: 'review_log' }>): Promise<void> {
+  if (op.op === 'delete') {
+    await db.reviewLogs.delete(op.entityId);
+    return;
+  }
+
+  const payload = op.payload;
+  if (!payload) {
+    throw new Error(`Missing payload for review log operation ${op.entityId}`);
+  }
+
+  await db.transaction('rw', db.reviewLogs, async () => {
+    const existing = await db.reviewLogs.get(op.entityId);
+    const reviewLog: ReviewLog = {
+      id: op.entityId,
+      cardId: payload.card_id,
+      timestamp: payload.timestamp ?? existing?.timestamp ?? Date.now(),
+      rating: payload.rating,
+      durationMs: payload.duration_ms ?? existing?.durationMs ?? 0,
+    };
+    await db.reviewLogs.put(reviewLog);
+  });
+}
+
 function normalizeDifficulty(
   value: unknown,
   fallback: Deck['config']['difficulty'],
@@ -423,4 +637,12 @@ function normalizeDifficulty(
     return value as Deck['config']['difficulty'];
   }
   return fallback ?? 'auto';
+}
+
+function resolveNoteTypeId(modelName: string): string {
+  const normalized = modelName.trim().toLowerCase();
+  if (normalized === 'basic' || normalized === '1-basic') {
+    return DEFAULT_NOTE_TYPE_ID;
+  }
+  return DEFAULT_NOTE_TYPE_ID;
 }

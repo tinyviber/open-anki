@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'bun:test'
 import Fastify, { type FastifyInstance } from 'fastify';
 import { newDb } from 'pg-mem';
 import { syncRoutes } from '../syncRoutes.js';
-import { setTestPool } from '../../db/pg-service.js';
+import { setTestPool } from '../../db/database.js';
 import { DEFAULT_PULL_LIMIT } from '../../../../shared/src/sync.js';
 
 const TEST_USER_ID = '00000000-0000-0000-0000-000000000001';

@@ -7,7 +7,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Pool } from 'pg';
 import { syncRoutes } from '../syncRoutes.js';
-import { setTestPool } from '../../db/pg-service.js';
+import { setTestPool } from '../../db/database.js';
 
 const TEST_USER_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 const TEST_DEVICE_ID = 'real-schema-device';

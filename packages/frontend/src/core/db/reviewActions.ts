@@ -1,5 +1,11 @@
 import { db, type Card, type ReviewLog } from './db';
 import { generateGUID } from '@/lib/guidUtils';
+import {
+  cardStateToCardType,
+  cardStateToQueue,
+  mapCardToPayload,
+  mapReviewLogToPayload,
+} from '@/core/sync/payloadMappers';
 
 const DEFAULT_EASE_FACTOR = 2.5; // 默认初始易度
 const SECONDS_IN_DAY = 24 * 60 * 60 * 1000;
@@ -11,12 +17,12 @@ const SECONDS_IN_DAY = 24 * 60 * 60 * 1000;
  * @param rating The user's rating (1: Again, 2: Hard, 3: Good, 4: Easy).
  * @returns { interval: number, ease: number, nextDue: number }
  */
-function calculateSM2({ card, rating }: { card: Card, rating: ReviewLog['rating'] }): { 
-  newIvl: number, 
-  newEase: number, 
-  nextDue: number 
+function calculateSM2({ card, rating }: { card: Card, rating: ReviewLog['rating'] }): {
+  newIvl: number,
+  newEase: number,
+  nextDue: number
 } {
-  let q = rating; 
+  const q = rating;
   let nextIvl = card.ivl || 0;
   let newEase = card.ease || DEFAULT_EASE_FACTOR;
   let nextDue = Date.now(); 
@@ -108,11 +114,22 @@ export async function gradeCard(cardId: string, rating: ReviewLog['rating']): Pr
 
   
   // 3. Prepare Card Update
-  const updatedCard: Partial<Card> = {
+  const nextReps = (card.reps ?? 0) + 1;
+  const nextLapses = rating <= 2 ? (card.lapses ?? 0) + 1 : card.lapses ?? 0;
+  const nextCardType = cardStateToCardType(newState);
+  const nextQueue = cardStateToQueue(newState);
+
+  const nextCardState: Card = {
+    ...card,
     state: newState,
     due: nextDue,
     ivl: newIvl,
     ease: newEase,
+    reps: nextReps,
+    lapses: nextLapses,
+    cardType: nextCardType,
+    queue: nextQueue,
+    originalDue: card.originalDue ?? null,
   };
   
   // 4. Create Review Log
@@ -121,16 +138,28 @@ export async function gradeCard(cardId: string, rating: ReviewLog['rating']): Pr
     cardId: cardId,
     timestamp: now,
     rating: rating,
-    durationMs: 2000, // Mock duration for MVP
+    durationMs: 2000,
   };
   
   // 5. Atomic Update and Logging
-  await db.transaction('rw', db.cards, db.reviewLogs, async () => {
-    // a. Update the card
-    await db.cards.update(cardId, updatedCard);
+  await db.transaction('rw', db.cards, db.reviewLogs, db.syncMeta, async () => {
+    await db.cards.put(nextCardState);
+    await db.syncMeta.add({
+      entityId: nextCardState.id,
+      entityType: 'card',
+      op: 'update',
+      timestamp: now,
+      payload: mapCardToPayload(nextCardState),
+    });
 
-    // b. Add the log entry
     await db.reviewLogs.add(reviewLog);
+    await db.syncMeta.add({
+      entityId: reviewLog.id,
+      entityType: 'review_log',
+      op: 'create',
+      timestamp: now,
+      payload: mapReviewLogToPayload(reviewLog),
+    });
   });
 }
 

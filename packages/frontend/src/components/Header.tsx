@@ -2,7 +2,7 @@ import { Search, Settings, User, Moon, Sun, RefreshCw, AlertTriangle, LogOut } f
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { useState, useEffect, useRef } from "react";
-import { useSync } from "@/hooks/useSyncEngine";
+import { useSync } from "@/hooks/useSync";
 import { formatRelativeTime } from "@/lib/dateUtils";
 import { useAuth } from "@/hooks/useAuth";
 

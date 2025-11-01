@@ -1,17 +1,20 @@
 {
-	"name": "Debian",
-	"image": "mcr.microsoft.com/devcontainers/base:bullseye",
-	"features": {
-		"ghcr.io/shyim/devcontainers-features/bun:0": {},
-		"ghcr.io/devcontainers-extra/features/supabase-cli:1": {},
-		"ghcr.io/devcontainers/features/node:1": {
-			"version": "lts"
-		},
-		"ghcr.io/devcontainers/features/docker-in-docker:2": {
-            "moby": "false", // 禁用 D-i-D，而是使用宿主机
-            "enableNonRootDocker": "true" // 自动配置非 Root 用户的权限
-        }
-	},
-	"postCreateCommand": "bun install -g pm2 && echo 'export PATH=$PATH:/home/vscode/.bun/bin' >> /home/vscode/.bashrc",
-        "postStartCommand": "./scripts/devcontainer/bootstrap-supabase.sh"
+  "name": "open-anki",
+  "image": "mcr.microsoft.com/devcontainers/base:bullseye",
+  "features": {
+    "ghcr.io/shyim/devcontainers-features/bun:0": {},
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "lts"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "moby": "false",
+      "enableNonRootDocker": "true"
+    }
+  },
+  "containerEnv": {
+    "SUPABASE_INSTALL": "false",
+    "SUPABASE_AUTOSTART": "false"
+  },
+  "postCreateCommand": "./scripts/devcontainer/post-create.sh",
+  "postStartCommand": "./scripts/devcontainer/post-start.sh"
 }

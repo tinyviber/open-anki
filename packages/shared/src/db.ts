@@ -44,6 +44,8 @@ export interface NoteType {
 export interface Note {
   id: string;
   noteTypeId: string;
+  deckId: string;
+  modelName: string;
   fields: Record<string, string>;
   tags: string[];
   guid: string;
@@ -58,6 +60,11 @@ export interface Card {
   due: number;
   ivl: number;
   ease: number;
+  reps: number;
+  lapses: number;
+  cardType: number;
+  queue: number;
+  originalDue: number | null;
 }
 
 export interface ReviewLog {

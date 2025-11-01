@@ -23,7 +23,7 @@ export class OpenAnkiDB extends Dexie {
     this.version(1).stores({
       decks: '++id, parentId',
       noteTypes: '++id',
-      notes: '++id, guid, *tags, noteTypeId',
+      notes: '++id, guid, deckId, *tags, noteTypeId',
       cards: '++id, deckId, [state+due], state, noteId',
       reviewLogs: '++id, cardId, timestamp',
       syncMeta: '++id, entityId, entityType',
@@ -33,7 +33,7 @@ export class OpenAnkiDB extends Dexie {
       .stores({
         decks: '++id, parentId',
         noteTypes: '++id',
-        notes: '++id, guid, *tags, noteTypeId',
+        notes: '++id, guid, deckId, *tags, noteTypeId',
         cards: '++id, deckId, [state+due], state, noteId',
         reviewLogs: '++id, cardId, timestamp',
         syncMeta: '++id, entityId, entityType',
@@ -58,7 +58,76 @@ export class OpenAnkiDB extends Dexie {
           .filter((entry: any) => entry.entityType !== 'deck')
           .delete();
       });
+
+    this.version(3)
+      .stores({
+        decks: '++id, parentId',
+        noteTypes: '++id',
+        notes: '++id, guid, deckId, *tags, noteTypeId',
+        cards: '++id, deckId, [state+due], state, noteId',
+        reviewLogs: '++id, cardId, timestamp',
+        syncMeta: '++id, entityId, entityType',
+        syncState: '&id',
+      })
+      .upgrade(async tx => {
+        const notesTable = tx.table<Note, string>('notes');
+        const cardsTable = tx.table<Card, string>('cards');
+
+        await notesTable.toCollection().modify(async note => {
+          if (!note.deckId) {
+            const relatedCard = await cardsTable.where('noteId').equals(note.id).first();
+            note.deckId = relatedCard?.deckId ?? 'unknown-deck';
+          }
+          if (!note.modelName) {
+            note.modelName = 'Basic';
+          }
+        });
+
+        await cardsTable.toCollection().modify(card => {
+          card.reps = card.reps ?? 0;
+          card.lapses = card.lapses ?? 0;
+          card.cardType = card.cardType ?? mapStateToCardType(card.state);
+          card.queue = card.queue ?? mapStateToQueue(card.state);
+          if (card.originalDue === undefined) {
+            card.originalDue = null;
+          }
+        });
+      });
   }
 }
 
 export const db = new OpenAnkiDB();
+
+function mapStateToCardType(state: Card['state']): number {
+  switch (state) {
+    case 'new':
+      return 0;
+    case 'learning':
+      return 1;
+    case 'review':
+      return 2;
+    case 'suspended':
+      return 3;
+    case 'buried':
+      return 4;
+    default:
+      return 1;
+  }
+}
+
+function mapStateToQueue(state: Card['state']): number {
+  switch (state) {
+    case 'new':
+      return 0;
+    case 'learning':
+      return 1;
+    case 'review':
+      return 2;
+    case 'suspended':
+      return -1;
+    case 'buried':
+      return -2;
+    default:
+      return 1;
+  }
+}
